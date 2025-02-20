@@ -1,0 +1,9 @@
+# Ignore ISO files and their signatures
+*.iso
+*.sig
+
+# Ignore the key files
+*.asc
+
+# Ignore the backup directory
+backup/
