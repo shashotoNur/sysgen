@@ -1,5 +1,7 @@
 #!/bin/bash
 
+echo "Install script is executing..."
+poweroff
 set -e  # Exit on error
 
 # Check if system is booted in UEFI mode

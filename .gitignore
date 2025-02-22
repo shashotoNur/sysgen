@@ -7,3 +7,6 @@
 
 # Ignore the backup directory
 backup/
+archiso/
+sysgen/
+iso/

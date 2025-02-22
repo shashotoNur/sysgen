@@ -17,6 +17,19 @@ if [[ -z "$USB_DEVICE" ]]; then
     exit 1
 fi
 
+# Check if the device has any mounted partitions
+MOUNTED_PARTITIONS=$(mount | grep "^$USB_DEVICE" | awk '{print $1}')
+
+if [[ -n "$MOUNTED_PARTITIONS" ]]; then
+    echo "Unmounting partitions on $USB_DEVICE..."
+    for PARTITION in $MOUNTED_PARTITIONS; do
+        sudo umount -l "$PARTITION" || sudo umount -f "$PARTITION"
+        echo "Unmounted: $PARTITION"
+    done
+else
+    echo "$USB_DEVICE is not mounted."
+fi
+
 # Show warning before formatting
 echo "WARNING: This will completely erase all data on $USB_DEVICE!"
 read -p "Are you sure you want to continue? (y/N): " CONFIRM
@@ -63,17 +76,48 @@ read -rsp "Enter passphrase for GPG key export: " GPG_PASSPHRASE
 echo ""
 
 # Prompt user to backup necessary files
-echo "Ensure you have backed up important files to ./backup."
-read -p "Press Enter to continue..."
+DATA_DIR="./backup/data"
+mkdir -p $DATA_DIR
 
-ISO_NAME="archlinux-x86_64.iso"
+SELECTED="/tmp/fzf_selected"
+SIZE="/tmp/fzf_total"
+
+# Clear previous selections
+> "$SELECTED"
+> "$SIZE"
+
+# Use fzf to select multiple files and directories
+SELECTED_ITEMS=$(find ~ -mindepth 1 -maxdepth 5 | fzf --multi --preview 'du -sh {}' \
+    --bind "space:execute-silent(
+        grep -Fxq {} $SELECTED && sed -i '\|^{}$|d' $SELECTED || echo {} >> $SELECTED;
+        du -ch \$(cat $SELECTED 2>/dev/null) | grep total$ > $SIZE
+    )+toggle" \
+    --bind "ctrl-r:execute-silent(truncate -s 0 $SELECTED; truncate -s 0 $SIZE)+reload(find ~ -mindepth 1 -maxdepth 5)" \
+    --preview 'cat /tmp/fzf_total' \
+    --bind "ctrl-a:execute-silent(find ~ -mindepth 1 -maxdepth 5 > $SELECTED; du -ch \$(cat $SELECTED) | grep total$ > $SIZE)+select-all"
+)
+
+if [[ -z "$SELECTED_ITEMS" ]]; then
+    echo "No files or directories selected. Exiting."
+    exit 1
+else
+    # Display the final total size
+    TOTAL_SIZE=$(du -ch $(cat "$SELECTED" 2>/dev/null) | grep "total$" | awk '{print $1}')
+    echo "Total size of selected items: $TOTAL_SIZE"
+    echo "Files and directories selected:"
+    echo $SELECTED_ITEMS
+fi
+
+SCRIPT_DIR="sysgen"
+mkdir -p "$SCRIPT_DIR"
+cp ./*.sh "$SCRIPT_DIR"
 
 # Start a new tmux session for parallel jobs
-SESSION_NAME="arch_install"
+SESSION_NAME="system_generator"
 tmux new-session -d -s "$SESSION_NAME"
 
-# Pane 1: Download Arch Linux ISO and verify integrity
-tmux send-keys -t "$SESSION_NAME" "echo 'Downloading Arch ISO...'; wget -c https://mirrors.edge.kernel.org/archlinux/iso/latest/$ISO_NAME && wget -c https://mirrors.edge.kernel.org/archlinux/iso/latest/$ISO_NAME.sig && exit" C-m
+# Pane 1: Build a modified version of the Arch ISO
+tmux send-keys -t "$SESSION_NAME" "echo 'Cloning ArchISO and building.'; sudo bash utils/buildiso.sh . && exit" C-m
 
 # Pane 2: Install Ventoy on multiboot partition
 tmux split-window -h -t "$SESSION_NAME"
@@ -83,17 +127,16 @@ tmux send-keys -t "$SESSION_NAME" "echo 'Setting up Ventoy on $USB_DEVICE...'; y
 tmux split-window -v -t "$SESSION_NAME"
 tmux send-keys -t "$SESSION_NAME" "echo 'Exporting GPG keys...'; gpg --export-secret-keys --pinentry-mode loopback --passphrase '$GPG_PASSPHRASE' > private.asc && gpg --export --armor > public.asc && exit" C-m
 
+# Pane 4: Copy the selected files for backup
+tmux split-window -h -t "$SESSION_NAME"
+tmux send-keys -t "$SESSION_NAME" "echo 'Moving files...'; mv $SELECTED_ITEMS $DATA_DIR && echo 'Move complete!' && exit" C-m
+
 # Attach to the tmux session and wait for user to close panes
 tmux attach-session -t "$SESSION_NAME"
 
-# Once tmux session is closed, continue the script
-
-# Verify integrity of Arch ISO
-gpg --verify $ISO_NAME.sig $ISO_NAME
-
 # Check if the key files are empty
 if [ ! -s private.asc ] || [ ! -s public.asc ]; then
-  read -p "At least one of the key files is empty! Press Enter to continue..."
+  echo "Warning: At least one of the key files is empty!"
 fi
 
 # Move the key files to backup
@@ -113,9 +156,6 @@ fi
 echo "Formatting "${USB_DEVICE}3" as FAT32 (STORAGE)..."
 mkfs.vfat -F32 "${USB_DEVICE}3" -n STORAGE
 
-# Mount the storage partition to verify it is properly formatted
-mount "${USB_DEVICE}3" /mnt/storage
-
 # Mount the partitions
 STORAGE_MOUNT="/mnt/storage"
 MULTIBOOT_MOUNT="/mnt/multiboot"
@@ -124,38 +164,15 @@ mkdir -p "$STORAGE_MOUNT" "$MULTIBOOT_MOUNT"
 mount "${USB_DEVICE}3" "$STORAGE_MOUNT"
 mount "${USB_DEVICE}1" "$MULTIBOOT_MOUNT"
 
-# Ensure the installation script runs on boot
-WORK_DIR="./archiso"
-
-# Prepare working directories
-mkdir -p "$WORK_DIR"
-sudo mount -o loop "$ISO_NAME" /mnt
-cp -r /mnt "$WORK_DIR/iso"
-sudo umount /mnt
-
-# Copy installation script
-sudo mkdir -p "$WORK_DIR/iso/airootfs/root"
-sudo cp ./*.sh "$WORK_DIR/iso/airootfs/root/"
-
-# Ensure the script runs on boot
-sudo bash -c "echo 'sudo /root/main.sh install' >> $WORK_DIR/iso/airootfs/root/.bashrc"
-
-# Build the modified ISO
-echo "Building the modified arch ISO..."
-sudo mkarchiso -v -w "$WORK_DIR/work" -o "$WORK_DIR/out" "$WORK_DIR/iso"
-
-# Output final ISO location
-echo "Custom Arch ISO created at: $WORK_DIR/out"
-
 # Copy necessary files
 echo "Copying the arch iso to the USB drive..."
-cp $WORK_DIR/out/*.iso "$MULTIBOOT_MOUNT"
+cp iso/sysgen_archlinux.iso "$MULTIBOOT_MOUNT"
 
-rm $ISO_NAME
-rm -rf $WORK_DIR
+echo "Copying backup to the USB drive..."
+cp -r $SCRIPT_DIR backup
+cp -r backup "$STORAGE_MOUNT"
 
-echo "Copying the scripts and backup to the USB drive..."
-cp -r "$(dirname "$0")" "$STORAGE_MOUNT"
+sudo rm -rf archiso iso work out backup $SCRIPT_DIR
 
 # Create Ventoy config directory if it doesn't exist
 mkdir -p "$MULTIBOOT_MOUNT/ventoy"
@@ -164,26 +181,25 @@ mkdir -p "$MULTIBOOT_MOUNT/ventoy"
 cat <<EOF | sudo tee "$MULTIBOOT_MOUNT/ventoy/ventoy.json"
 {
     "control": [
-        { "VTOY_DEFAULT_MENU_MODE": "1" },
-        { "VTOY_TIMEOUT": "1" },
-        { "VTOY_DEFAULT_SEARCH_ROOT": "1" }
+        { "VTOY_MENU_TIMEOUT": "0" },
+        { "VTOY_SECONDARY_TIMEOUT": "0" }
     ]
 }
 EOF
 
-echo "Ventoy is configured to boot the first ISO automatically\!"
+echo "Ventoy is configured to boot the first ISO in normal mode automatically!"
 
 # Get the boot number for EFI USB Device
 USB_BOOT_NUM=$(efibootmgr | awk '/EFI USB Device/ {gsub("[^0-9]", "", $1); print $1}')
 
 # Check if a USB boot entry was found
 if [[ -z "$USB_BOOT_NUM" ]]; then
-    echo "Error: No EFI USB Device found in efibootmgr output."
+    echo "Error: No EFI USB Device found in efibootmgr output. You would have to manually boot into the USB Device."
     systemctl reboot --firmware-setup
 fi
 
 echo "Found EFI USB Device with Boot Number: $USB_BOOT_NUM"
 
 # Set the USB device as the next boot option
-efibootmgr --bootnext "$USB_BOOT_NUM"
+sudo efibootmgr --bootnext "$USB_BOOT_NUM"
 systemctl reboot
