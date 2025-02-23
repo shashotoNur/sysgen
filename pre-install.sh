@@ -17,6 +17,54 @@ if [[ -z "$USB_DEVICE" ]]; then
     exit 1
 fi
 
+# Show warning before formatting
+echo "WARNING: This will completely erase all data on $USB_DEVICE!"
+read -p "Are you sure you want to continue? (y/N): " CONFIRM
+
+if [[ "$CONFIRM" != "y" ]]; then
+    echo "Aborted."
+    exit 1
+fi
+
+# Get passphrase for GPG key export
+read -rsp "Enter passphrase for GPG key export: " GPG_PASSPHRASE
+echo ""
+
+# Prompt user to backup necessary files
+DATA_DIR="./backup/data"
+mkdir -p $DATA_DIR
+
+SELECTED="/tmp/fzf_selected"
+SIZE="/tmp/fzf_total"
+
+# Clear previous selections
+> "$SELECTED"
+> "$SIZE"
+
+# Use fzf to select multiple files and directories
+SELECTED_ITEMS=$(find ~ -mindepth 1 -maxdepth 5 | fzf --multi --preview 'du -sh {}' \
+    --bind "space:execute-silent(
+        grep -Fxq {} $SELECTED && sed -i '\|^{}$|d' $SELECTED || echo {} >> $SELECTED;
+        du -ch \$(cat $SELECTED 2>/dev/null) | grep total$ > $SIZE
+    )+toggle" \
+    --bind "ctrl-r:execute-silent(truncate -s 0 $SELECTED; truncate -s 0 $SIZE)+reload(find ~ -mindepth 1 -maxdepth 5)" \
+    --preview 'cat /tmp/fzf_total' \
+    --bind "ctrl-a:execute-silent(find ~ -mindepth 1 -maxdepth 5 > $SELECTED; du -ch \$(cat $SELECTED) | grep total$ > $SIZE)+select-all"
+)
+
+if [[ -z "$SELECTED_ITEMS" ]]; then
+    echo "No files or directories selected. Exiting."
+else
+    # Display the final total size
+    TOTAL_SIZE=$(du -ch $(cat "$SELECTED" 2>/dev/null) | grep "total$" | awk '{print $1}')
+    echo "Total size of selected items: $TOTAL_SIZE"
+    echo "Files and directories selected:"
+    echo $SELECTED_ITEMS
+fi
+
+# Get the installation configurations
+bash utils/getconfig.sh
+
 # Check if the device has any mounted partitions
 MOUNTED_PARTITIONS=$(mount | grep "^$USB_DEVICE" | awk '{print $1}')
 
@@ -28,14 +76,6 @@ if [[ -n "$MOUNTED_PARTITIONS" ]]; then
     done
 else
     echo "$USB_DEVICE is not mounted."
-fi
-
-# Show warning before formatting
-echo "WARNING: This will completely erase all data on $USB_DEVICE!"
-read -p "Are you sure you want to continue? (y/N): " CONFIRM
-if [[ "$CONFIRM" != "y" ]]; then
-    echo "Aborted."
-    exit 1
 fi
 
 # Wipe existing filesystem signatures
@@ -71,46 +111,10 @@ mkdir -p ./backup/code
 sudo -u "$1" code --list-extensions > ./backup/code/ext_list.txt
 sudo cp /home/$1/.config/Code\ -\ OSS/User/settings.json ./backup/code
 
-# Get passphrase for GPG key export
-read -rsp "Enter passphrase for GPG key export: " GPG_PASSPHRASE
-echo ""
-
-# Prompt user to backup necessary files
-DATA_DIR="./backup/data"
-mkdir -p $DATA_DIR
-
-SELECTED="/tmp/fzf_selected"
-SIZE="/tmp/fzf_total"
-
-# Clear previous selections
-> "$SELECTED"
-> "$SIZE"
-
-# Use fzf to select multiple files and directories
-SELECTED_ITEMS=$(find ~ -mindepth 1 -maxdepth 5 | fzf --multi --preview 'du -sh {}' \
-    --bind "space:execute-silent(
-        grep -Fxq {} $SELECTED && sed -i '\|^{}$|d' $SELECTED || echo {} >> $SELECTED;
-        du -ch \$(cat $SELECTED 2>/dev/null) | grep total$ > $SIZE
-    )+toggle" \
-    --bind "ctrl-r:execute-silent(truncate -s 0 $SELECTED; truncate -s 0 $SIZE)+reload(find ~ -mindepth 1 -maxdepth 5)" \
-    --preview 'cat /tmp/fzf_total' \
-    --bind "ctrl-a:execute-silent(find ~ -mindepth 1 -maxdepth 5 > $SELECTED; du -ch \$(cat $SELECTED) | grep total$ > $SIZE)+select-all"
-)
-
-if [[ -z "$SELECTED_ITEMS" ]]; then
-    echo "No files or directories selected. Exiting."
-    exit 1
-else
-    # Display the final total size
-    TOTAL_SIZE=$(du -ch $(cat "$SELECTED" 2>/dev/null) | grep "total$" | awk '{print $1}')
-    echo "Total size of selected items: $TOTAL_SIZE"
-    echo "Files and directories selected:"
-    echo $SELECTED_ITEMS
-fi
-
+# Create script directory
 SCRIPT_DIR="sysgen"
 mkdir -p "$SCRIPT_DIR"
-cp ./*.sh "$SCRIPT_DIR"
+cp -r ./*.sh utils/ install_config.txt "$SCRIPT_DIR"
 
 # Start a new tmux session for parallel jobs
 SESSION_NAME="system_generator"

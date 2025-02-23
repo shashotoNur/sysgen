@@ -35,6 +35,9 @@ else
     exit 1
 fi
 
+# Include fuzzy finder in the iso
+echo "fzf" >> "$PROFILE_DIR/packages.x86_64"
+
 # Build the custom ISO
 sudo mkarchiso -v -w work -o out $PROFILE_DIR
 

@@ -1,7 +1,5 @@
 #!/bin/bash
 
-echo "Install script is executing..."
-poweroff
 set -e  # Exit on error
 
 # Check if system is booted in UEFI mode
@@ -10,43 +8,58 @@ if [[ "$UEFI_MODE" != "64" && "$UEFI_MODE" != "32" ]]; then
     echo "Error: System is not booted in UEFI mode!"
     exit 1
 fi
+#!/usr/bin/env bash
 
-# List available drives and let user select installation drive
-echo "Available drives:"
-lsblk -dpno NAME,SIZE | grep -E "/dev/sd|nvme|mmcblk"
-read -rp "Enter the drive to install the system (e.g., /dev/sdX): " INSTALL_DRIVE
-if [[ ! -b "$INSTALL_DRIVE" ]]; then
-    echo "Invalid drive selected."
-    exit 1
+CONFIG_FILE="install_config.txt"
+
+# If config file doesn't exist, run the script to generate it
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    bash utils/getconfig.sh
 fi
 
-# Get partition sizes
-read -rp "Enter boot partition size (e.g., 512M): " BOOT_SIZE
-read -rp "Enter root partition size (e.g., 50G): " ROOT_SIZE
-read -rp "Enter swap size (e.g., 8G, or 0 for no swap): " SWAP_SIZE
-read -rp "Enter home partition size (e.g., remaining space: 100%): " HOME_SIZE
+# Function to extract values
+extract_value() {
+    grep -E "^$1:" "$CONFIG_FILE" | awk -F': ' '{print $2}'
+}
 
-# Get Wi-Fi credentials
-read -rp "Enter Wi-Fi SSID: " WIFI_SSID
-read -rsp "Enter Wi-Fi Password: " WIFI_PASSWORD
-echo ""
+# Read configuration values
+FULL_NAME=$(extract_value "Full Name")
+EMAIL=$(extract_value "Email")
+USERNAME=$(extract_value "Username")
+HOSTNAME=$(extract_value "Hostname")
+LOCAL_INSTALL=$(extract_value "Local Installation")
+INSTALL_DRIVE=$(extract_value "Drive")
+DRIVE_SIZE=$(extract_value "Drive Size")
+BOOT_SIZE=$(extract_value "Boot Partition")
+ROOT_SIZE=$(extract_value "Root Partition")
+SWAP_SIZE=$(extract_value "Swap Partition")
+HOME_SIZE=$(extract_value "Home Partition")
+NETWORK_TYPE=$(extract_value "Network Type")
+PASSWORD=$(extract_value "Password")
+LUKS_PASS=$(extract_value "LUKS Password")
+ROOT_PASS=$(extract_value "Root Password")
 
-# Get username and hostname
-read -rp "Enter your username: " USERNAME
-read -rp "Enter hostname: " HOSTNAME
-
-# Ask if LUKS and root password should be the same
-read -rp "Use the same password for LUKS and root? (y/n): " SAME_PASS
-if [[ "$SAME_PASS" == "y" ]]; then
-    read -rsp "Enter the password: " ROOT_PASS
-    echo ""
-    LUKS_PASS="$ROOT_PASS"
-else
-    read -rsp "Enter LUKS password: " LUKS_PASS
-    echo ""
-    read -rsp "Enter root password: " ROOT_PASS
-    echo ""
+# Handle LUKS and Root passwords
+if [[ -n "$PASSWORD" ]]; then
+    LUKS_PASS=$PASSWORD
+    ROOT_PASS=$PASSWORD
 fi
+
+# Handle WiFi details if applicable
+if [[ "$NETWORK_TYPE" == "wifi" ]]; then
+    WIFI_SSID=$(extract_value "WiFi SSID")
+    WIFI_PASSWORD=$(extract_value "WiFi Password")
+fi
+
+# Debug: Print extracted variables (excluding passwords for security)
+echo "Name: $FULL_NAME"
+echo "Username: $USERNAME"
+echo "Hostname: $HOSTNAME"
+echo "Install Drive: $INSTALL_DRIVE"
+echo "Drive Size: $DRIVE_SIZE"
+echo "Boot: $BOOT_SIZE, Root: $ROOT_SIZE, Swap: $SWAP_SIZE, Home: $HOME_SIZE"
+echo "Network Type: $NETWORK_TYPE"
+[[ "$NETWORK_TYPE" == "wifi" ]] && echo "WiFi SSID: $WIFI_SSID"
 
 # Wipe the selected drive
 echo "Wiping $INSTALL_DRIVE..."
@@ -139,7 +152,7 @@ echo "root:$ROOT_PASS" | chpasswd
 # Create user and set password
 echo "Creating user $USERNAME..."
 useradd -m -G wheel -s /bin/bash "$USERNAME"
-echo "$USERNAME:$ROOT_PASS" | chpasswd  # Using root password if the user chose same password
+echo "$USERNAME:$ROOT_PASS" | chpasswd
 
 # Ensure user has sudo privileges
 echo "Configuring sudo privileges..."
@@ -184,7 +197,9 @@ echo "Configuring GRUB for LUKS..."
 sed -i "s|GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"cryptdevice=UUID=$(blkid -s UUID -o value $ROOT_PART):cryptroot root=/dev/mapper/cryptroot\"|" /etc/default/grub
 grub-mkconfig -o /boot/grub/grub.cfg
 
+# Backup the EFI file as a failsafe
+mkdir /boot/efi/EFI/BOOT 
+cp /boot/efi/EFI/GRUB/grubx64.efi /boot/efi/EFI/BOOT/BOOTX64.EFI
+
 # Reboot system
-echo "Installation complete! Rebooting in 5 seconds..."
-sleep 5
 reboot
