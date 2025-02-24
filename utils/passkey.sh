@@ -1,40 +1,60 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 set -e  # Exit on error
+set -o pipefail  # Fail if any command in a pipeline fails
 
-KEYFILE="/root/luks.key"
-CRYPTTAB="/etc/crypttab"
+# Define variables
+USB_DEVICE="/dev/sdc3"
+USB_MOUNT="/mnt/usbkey"      # Temporary mount point for USB
+KEYFILE_PATH="$USB_MOUNT/luks-home.key"
 
-# Replace these with your actual LUKS partitions
-LUKS_ROOT="/dev/sda1"
-LUKS_HOME="/dev/sda2"
+LUKS_DEVICE="/dev/sda4"      # LUKS-encrypted partition
+LUKS_NAME="home_crypt"       # Name for the decrypted LUKS mapping
+MOUNTPOINT="/home"           # Mount point for the decrypted partition
+BTRFS_SUBVOL="@home"         # Btrfs subvolume for home
 
-# Ensure the script is run as root
-if [[ $EUID -ne 0 ]]; then
-    echo "Please run this script as root."
+# Ensure dependencies are installed
+if ! command -v cryptsetup &>/dev/null; then
+    echo "cryptsetup is not installed. Install it with: sudo pacman -S cryptsetup"
     exit 1
 fi
 
-# 1. Generate a secure keyfile
-echo "Generating LUKS keyfile..."
-dd if=/dev/urandom of="$KEYFILE" bs=512 count=4
-chmod 600 "$KEYFILE"
+# Create a mount point for the USB if it doesn't exist
+mkdir -p "$USB_MOUNT"
 
-# 2. Add the keyfile to LUKS-encrypted partitions
-echo "Adding keyfile to LUKS root partition..."
-cryptsetup luksAddKey "$LUKS_ROOT" "$KEYFILE"
+# Mount the USB drive
+echo "Mounting USB drive..."
+sudo mount "$USB_DEVICE" "$USB_MOUNT"
 
-echo "Adding keyfile to LUKS home partition..."
-cryptsetup luksAddKey "$LUKS_HOME" "$KEYFILE"
+# Generate a secure keyfile
+echo "Creating keyfile..."
+sudo dd if=/dev/urandom of="$KEYFILE_PATH" bs=512 count=4
+sudo chmod 600 "$KEYFILE_PATH"
 
-# 3. Configure crypttab for automatic unlocking
-echo "Configuring /etc/crypttab..."
-echo "cryptroot  $LUKS_ROOT  $KEYFILE  luks" >> "$CRYPTTAB"
-echo "crypthome  $LUKS_HOME  $KEYFILE  luks" >> "$CRYPTTAB"
+# Add keyfile to LUKS
+echo "Adding keyfile to LUKS..."
+sudo cryptsetup luksAddKey "$LUKS_DEVICE" "$KEYFILE_PATH"
 
-# 4. Update initramfs to embed the keyfile
-echo "Embedding keyfile into initramfs..."
-echo "FILES=($KEYFILE)" >> /etc/mkinitcpio.conf
-mkinitcpio -P
+# Get UUIDs for fstab and GRUB config
+LUKS_UUID=$(blkid -s UUID -o value "$LUKS_DEVICE")
+USB_UUID=$(blkid -s UUID -o value "$USB_DEVICE")
 
-echo "Configuration complete! Your system should now automatically unlock LUKS partitions on boot."
+# Ensure fstab mounts the decrypted partition
+FSTAB_ENTRY="UUID=$LUKS_UUID $MOUNTPOINT btrfs defaults,noatime,compress=zstd,subvol=$BTRFS_SUBVOL 0 2"
+echo "Updating /etc/fstab..."
+grep -q "$LUKS_UUID" /etc/fstab || echo "$FSTAB_ENTRY" | sudo tee -a /etc/fstab
+
+# Ensure GRUB includes cryptdevice and cryptkey
+GRUB_CFG="/etc/default/grub"
+echo "Updating GRUB configuration..."
+sudo sed -i "s|GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"cryptdevice=UUID=$LUKS_UUID:$LUKS_NAME cryptkey=UUID=$USB_UUID:$KEYFILE_PATH\"|" "$GRUB_CFG"
+
+# Regenerate GRUB config
+echo "Updating GRUB..."
+sudo grub-mkconfig -o /boot/grub/grub.cfg
+
+# Unmount the USB drive
+echo "Unmounting USB drive..."
+sudo umount "$USB_MOUNT"
+
+echo "LUKS keyfile setup complete!"
