@@ -1,10 +1,9 @@
 #!/bin/bash
 
-set -e  # Exit on error
+set -e # Exit on error
 
 # Check if system is booted in UEFI mode
-UEFI_MODE=$(cat /sys/firmware/efi/fw_platform_size 2>/dev/null || echo "Not UEFI")
-if [[ "$UEFI_MODE" != "64" && "$UEFI_MODE" != "32" ]]; then
+if [[ ! -d /sys/firmware/efi ]]; then
     echo "Error: System is not booted in UEFI mode!"
     exit 1
 fi
@@ -12,9 +11,7 @@ fi
 CONFIG_FILE="install_config.txt"
 
 # If config file doesn't exist, run the script to generate it
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    bash utils/getconfig.sh
-fi
+[[ ! -f "$CONFIG_FILE" ]] && bash utils/getconfig.sh
 
 # Function to extract values
 extract_value() {
@@ -22,158 +19,326 @@ extract_value() {
 }
 
 # Read configuration values
-FULL_NAME=$(extract_value "Full Name")
-EMAIL=$(extract_value "Email")
-USERNAME=$(extract_value "Username")
-HOSTNAME=$(extract_value "Hostname")
-LOCAL_INSTALL=$(extract_value "Local Installation")
-INSTALL_DRIVE=$(extract_value "Drive")
-DRIVE_SIZE=$(extract_value "Drive Size")
-BOOT_SIZE=$(extract_value "Boot Partition")
-ROOT_SIZE=$(extract_value "Root Partition")
-SWAP_SIZE=$(extract_value "Swap Partition")
-HOME_SIZE=$(extract_value "Home Partition")
-NETWORK_TYPE=$(extract_value "Network Type")
-PASSWORD=$(extract_value "Password")
-LUKS_PASS=$(extract_value "LUKS Password")
-ROOT_PASS=$(extract_value "Root Password")
+declare -A CONFIG_VALUES
+for key in "Full Name" "Email" "Username" "Hostname" "Local Installation" "Drive" "Drive Size" \
+    "Boot Partition" "Root Partition" "Swap Partition" "Home Partition" "Network Type" \
+    "Password" "LUKS Password" "Root Password" "WiFi SSID" "WiFi Password"; do
+    CONFIG_VALUES["$key"]=$(extract_value "$key")
+done
 
 # Handle LUKS and Root passwords
+PASSWORD=${CONFIG_VALUES["Password"]}
 if [[ -n "$PASSWORD" ]]; then
-    LUKS_PASS=$PASSWORD
-    ROOT_PASS=$PASSWORD
+    CONFIG_VALUES["LUKS Password"]=$PASSWORD
+    CONFIG_VALUES["Root Password"]=$PASSWORD
 fi
 
-# Handle WiFi details if applicable
-if [[ "$NETWORK_TYPE" == "wifi" ]]; then
-    WIFI_SSID=$(extract_value "WiFi SSID")
-    WIFI_PASSWORD=$(extract_value "WiFi Password")
+# Check if DRIVE is only "/dev/"
+if [[ "${CONFIG_VALUES["DRIVE"]}" == "/dev/" ]]; then
+    echo "No drive specified. Please select a drive:"
+
+    # List available drives (excluding partitions)
+    DRIVE_SELECTION=$(lsblk -dpno NAME,SIZE | grep -E "/dev/sd|/dev/nvme|/dev/mmcblk" | fzf --prompt="Select a drive: " --height=10 --border --reverse | awk '{print $1}')
+
+    if [[ -n "$DRIVE_SELECTION" ]]; then
+        CONFIG_VALUES["DRIVE"]="$DRIVE_SELECTION"
+        echo "Selected drive: ${CONFIG_VALUES["DRIVE"]}"
+    else
+        echo "No drive selected. Exiting."
+        exit 1
+    fi
 fi
 
 # Debug: Print extracted variables (excluding passwords for security)
-echo "Name: $FULL_NAME"
-echo "Username: $USERNAME"
-echo "Hostname: $HOSTNAME"
-echo "Install Drive: $INSTALL_DRIVE"
-echo "Drive Size: $DRIVE_SIZE"
-echo "Boot: $BOOT_SIZE, Root: $ROOT_SIZE, Swap: $SWAP_SIZE, Home: $HOME_SIZE"
-echo "Network Type: $NETWORK_TYPE"
-[[ "$NETWORK_TYPE" == "wifi" ]] && echo "WiFi SSID: $WIFI_SSID"
+echo "Name: ${CONFIG_VALUES["Full Name"]}"
+echo "Username: ${CONFIG_VALUES["Username"]}"
+echo "Hostname: ${CONFIG_VALUES["Hostname"]}"
+echo "Install Drive: ${CONFIG_VALUES["Drive"]}"
+echo "Drive Size: ${CONFIG_VALUES["Drive Size"]}"
+echo "Boot: ${CONFIG_VALUES["Boot Partition"]}, Root: ${CONFIG_VALUES["Root Partition"]}, Swap: ${CONFIG_VALUES["Swap Partition"]}, Home: ${CONFIG_VALUES["Home Partition"]}"
+echo "Network Type: ${CONFIG_VALUES["Network Type"]}"
+[[ "${CONFIG_VALUES["Network Type"]}" == "wifi" ]] && echo "WiFi SSID: ${CONFIG_VALUES["WiFi SSID"]}"
+
+# Connect to the wifi
+if [[ "${CONFIG_VALUES["Network Type"]}" == "wifi" ]]; then
+    echo "WiFi SSID: ${CONFIG_VALUES["WiFi SSID"]}"
+    iwctl --passphrase "${CONFIG_VALUES["WiFi Password"]}" station wlan0 connect "${CONFIG_VALUES["WiFi SSID"]}"
+fi
+
+# Check if there is internet
+if ping -c 1 8.8.8.8 &>/dev/null; then
+    echo "Internet connection is available."
+else
+    echo "Error: No internet connection."
+    exit 1
+fi
 
 # Wipe the selected drive
-echo "Wiping $INSTALL_DRIVE..."
-wipefs --all --force "$INSTALL_DRIVE"
+echo "Wiping ${CONFIG_VALUES["Drive"]}..."
+wipefs --all --force "${CONFIG_VALUES["Drive"]}"
 
 # Partition the disk
 echo "Creating partitions..."
-parted -s "$INSTALL_DRIVE" mklabel gpt
-parted -s "$INSTALL_DRIVE" mkpart primary fat32 1MiB "$BOOT_SIZE"
-parted -s "$INSTALL_DRIVE" set 1 esp on
-parted -s "$INSTALL_DRIVE" mkpart primary "$BOOT_SIZE" "$ROOT_SIZE"
-if [[ "$SWAP_SIZE" != "0" ]]; then
-    parted -s "$INSTALL_DRIVE" mkpart primary linux-swap "$ROOT_SIZE" "$SWAP_SIZE"
-fi
-parted -s "$INSTALL_DRIVE" mkpart primary "$SWAP_SIZE" "$HOME_SIZE"
+parted -s "${CONFIG_VALUES["Drive"]}" mklabel gpt
+start_size=$(unit_to_bytes "1MiB") # Start at 1MiB in bytes
 
-# Get partition names dynamically
-BOOT_PART="${INSTALL_DRIVE}1"
-ROOT_PART="${INSTALL_DRIVE}2"
-if [[ "$SWAP_SIZE" != "0" ]]; then
-    SWAP_PART="${INSTALL_DRIVE}3"
-    HOME_PART="${INSTALL_DRIVE}4"
+# Function to convert MiB or GiB to bytes
+unit_to_bytes() {
+    local u="$1"
+    local val=$(echo "$u" | sed 's/[A-Za-z]*$//')
+    local ut=$(echo "$u" | sed 's/^[0-9]*//' | tr '[:upper:]' '[:lower:]')
+
+    case "$ut" in
+    mib) echo $((val * 1024 * 1024)) ;;
+    gib) echo $((val * 1024 * 1024 * 1024)) ;;
+    *)
+        echo "Error: Invalid unit (MiB or GiB): $u"
+        exit 1
+        ;;
+    esac
+}
+
+# Function to convert bytes to MiB for parted.
+bytes_to_mib() {
+    local b="$1"
+    echo "$(($b / (1024 * 1024)))MiB"
+}
+
+# Boot Partition
+boot_size=$(unit_to_bytes "${CONFIG_VALUES["Boot Partition"]}")
+end_size=$((start_size + boot_size))
+parted -s "${CONFIG_VALUES["Drive"]}" mkpart primary fat32 "$(bytes_to_mib "$start_size")" "$(bytes_to_mib "$end_size")"
+parted -s "${CONFIG_VALUES["Drive"]}" set 1 esp on
+start_size="$end_size"
+
+# Root Partition
+root_size=$(unit_to_bytes "${CONFIG_VALUES["Root Partition"]}")
+end_size=$((start_size + root_size))
+parted -s "${CONFIG_VALUES["Drive"]}" mkpart primary "$(bytes_to_mib "$start_size")" "$(bytes_to_mib "$end_size")"
+start_size="$end_size"
+
+# Swap partition
+if [[ "${CONFIG_VALUES["Swap Partition"]}" != "0" ]]; then
+    swap_size=$(unit_to_bytes "${CONFIG_VALUES["Swap Partition"]}")
+    end_size=$((start_size + swap_size))
+    parted -s "${CONFIG_VALUES["Drive"]}" mkpart primary linux-swap "$(bytes_to_mib "$start_size")" "$(bytes_to_mib "$end_size")"
+    start_size="$end_size"
+fi
+
+# Home partition
+home_size=$(unit_to_bytes "${CONFIG_VALUES["Home Partition"]}")
+end_size=$((start_size + home_size))
+parted -s "${CONFIG_VALUES["Drive"]}" mkpart primary "$(bytes_to_mib "$start_size")" "$(bytes_to_mib "$end_size")"
+
+echo "Partitions created!"
+
+# Get partition names
+BOOT_PART="${CONFIG_VALUES["Drive"]}1"
+ROOT_PART="${CONFIG_VALUES["Drive"]}2"
+if [[ "${CONFIG_VALUES["Swap Partition"]}" != "0" ]]; then
+    SWAP_PART="${CONFIG_VALUES["Drive"]}3"
+    HOME_PART="${CONFIG_VALUES["Drive"]}4"
 else
-    HOME_PART="${INSTALL_DRIVE}3"
+    HOME_PART="${CONFIG_VALUES["Drive"]}3"
 fi
 
 # Encrypt root and home partitions
 echo "Encrypting root partition..."
-echo -n "$LUKS_PASS" | cryptsetup luksFormat "$ROOT_PART"
-echo -n "$LUKS_PASS" | cryptsetup open "$ROOT_PART" cryptroot
+echo -n "${CONFIG_VALUES["LUKS Password"]}" | cryptsetup luksFormat "$ROOT_PART"
+echo -n "${CONFIG_VALUES["LUKS Password"]}" | cryptsetup open "$ROOT_PART" cryptroot
 
 echo "Encrypting home partition..."
-echo -n "$LUKS_PASS" | cryptsetup luksFormat "$HOME_PART"
-echo -n "$LUKS_PASS" | cryptsetup open "$HOME_PART" crypthome
+echo -n "${CONFIG_VALUES["LUKS Password"]}" | cryptsetup luksFormat "$HOME_PART"
+echo -n "${CONFIG_VALUES["LUKS Password"]}" | cryptsetup open "$HOME_PART" crypthome
 
 # Format partitions
 echo "Formatting partitions..."
 mkfs.fat -F32 "$BOOT_PART" -n BOOT
 mkfs.btrfs -f /dev/mapper/cryptroot -L ROOT
 mkfs.btrfs -f /dev/mapper/crypthome -L HOME
-if [[ "$SWAP_SIZE" != "0" ]]; then
+if [[ "${CONFIG_VALUES["Swap Partition"]}" != "0" ]]; then
     mkswap "$SWAP_PART" -L SWAP
     swapon "$SWAP_PART"
 fi
 
 # Create Btrfs subvolumes
+echo "Creating Btrfs subvolumes..."
+mount -o compress=zstd,subvol=@ /dev/mapper/cryptroot /mnt
 mount /dev/mapper/cryptroot /mnt
 btrfs subvolume create /mnt/@
 btrfs subvolume create /mnt/@home
 umount /mnt
 
 # Mount subvolumes
+echo "Mounting subvolumes..."
 mount -o compress=zstd,subvol=@ /dev/mapper/cryptroot /mnt
 mkdir -p /mnt/home
 mount -o compress=zstd,subvol=@home /dev/mapper/crypthome /mnt/home
 
 # Mount boot partition
+echo "Mounting boot partition..."
 mkdir -p /mnt/boot/efi
 mount "$BOOT_PART" /mnt/boot/efi
 
-# Verify setup
-lsblk -f "$INSTALL_DRIVE"
+# Verify partitions, filesystems, and mounts
+verify_partitions() {
+    local errors=0
+
+    # Check boot partition
+    if ! blkid "${BOOT_PART}" | grep -q "TYPE=\"vfat\""; then
+        echo "Error: Boot partition is not formatted as FAT32"
+        errors=$((errors + 1))
+    fi
+
+    # Check root partition
+    if ! cryptsetup status cryptroot | grep -q "type:      LUKS2"; then
+        echo "Error: Root partition is not encrypted with LUKS2"
+        errors=$((errors + 1))
+    fi
+
+    if ! blkid /dev/mapper/cryptroot | grep -q "TYPE=\"btrfs\""; then
+        echo "Error: Root partition is not formatted as Btrfs"
+        errors=$((errors + 1))
+    fi
+
+    # Check home partition
+    if ! cryptsetup status crypthome | grep -q "type:      LUKS2"; then
+        echo "Error: Home partition is not encrypted with LUKS2"
+        errors=$((errors + 1))
+    fi
+
+    if ! blkid /dev/mapper/crypthome | grep -q "TYPE=\"btrfs\""; then
+        echo "Error: Home partition is not formatted as Btrfs"
+        errors=$((errors + 1))
+    fi
+
+    # Check swap partition if it exists
+    if [[ "${CONFIG_VALUES["Swap Partition"]}" != "0" ]]; then
+        if ! blkid "${SWAP_PART}" | grep -q "TYPE=\"swap\""; then
+            echo "Error: Swap partition is not formatted as swap"
+            errors=$((errors + 1))
+        fi
+    fi
+
+    # Check mounts
+    if ! findmnt /mnt | grep -q "/dev/mapper/cryptroot"; then
+        echo "Error: Root partition is not mounted at /mnt"
+        errors=$((errors + 1))
+    fi
+
+    if ! findmnt /mnt/home | grep -q "/dev/mapper/crypthome"; then
+        echo "Error: Home partition is not mounted at /mnt/home"
+        errors=$((errors + 1))
+    fi
+
+    if ! findmnt /mnt/boot/efi | grep -q "${BOOT_PART}"; then
+        echo "Error: Boot partition is not mounted at /mnt/boot/efi"
+        errors=$((errors + 1))
+    fi
+
+    # Check Btrfs subvolumes
+    if ! btrfs subvolume list /mnt | grep -q "@"; then
+        echo "Error: Root Btrfs subvolume '@' not found"
+        errors=$((errors + 1))
+    fi
+
+    if ! btrfs subvolume list /mnt | grep -q "@home"; then
+        echo "Error: Home Btrfs subvolume '@home' not found"
+        errors=$((errors + 1))
+    fi
+
+    if [ $errors -eq 0 ]; then
+        echo "All partitions, filesystems, and mounts verified successfully."
+        return 0
+    else
+        echo "Verification failed with $errors errors."
+        return 1
+    fi
+}
+
+# Run the verification
+if verify_partitions; then
+    echo "Partition verification passed. Continuing with installation..."
+else
+    echo "Partition verification failed. Please check the errors and fix before continuing."
+    exit 1
+fi
+
+# Update the mirrors
+reflector --verbose --country India,China,Japan,Singapore,US --protocol https --sort rate --latest 20 --download-timeout 45 --threads 5 --save /etc/pacman.d/mirrorlist
 
 # Install base system
 echo "Installing base system..."
-pacstrap /mnt base base-devel linux linux-headers linux-lts linux-lts-headers linux-zen linux-zen-headers linux-firmware nano vim networkmanager iw wpa_supplicant diaecho
+pacstrap /mnt base base-devel linux linux-headers linux-lts linux-lts-headers linux-zen linux-zen-headers linux-firmware nano vim networkmanager iw wpa_supplicant dialog
 
 # Generate fstab
-genfstab -U /mnt >> /mnt/etc/fstab
+genfstab -U /mnt >>/mnt/etc/fstab
 cat /mnt/etc/fstab
 
 # Chroot into the new system
-echo "Changing root"
+echo "Changing root..."
 arch-chroot /mnt /bin/bash
 
 # Ensure partitions are unlocked at boot
 echo "Configuring LUKS partitions to unlock at boot..."
-echo "cryptroot  UUID=$(blkid -s UUID -o value $ROOT_PART)  none  luks" >> /etc/crypttab
-echo "crypthome  UUID=$(blkid -s UUID -o value $HOME_PART)  none  luks" >> /etc/crypttab
+echo "cryptroot  UUID=$(blkid -s UUID -o value $ROOT_PART)  none  luks" >>/etc/crypttab
+echo "crypthome  UUID=$(blkid -s UUID -o value $HOME_PART)  none  luks" >>/etc/crypttab
 
-# Update mkinitcpio HOOKS
+# Create a key file for the home partition
+echo "Creating key file for home partition..."
+dd if=/dev/urandom of=/mnt/root/home.key bs=512 count=4
+chmod 600 /mnt/root/home.key
+
+# Add the key file to the LUKS home partition
+echo "Adding key file to home partition..."
+echo -n "${CONFIG_VALUES["LUKS Password"]}" | cryptsetup luksAddKey "$HOME_PART" /mnt/root/home.key
+
+# Ensure the home partition is unlocked at boot using the key file
+echo "Configuring home partition to unlock at boot with key file..."
+echo "crypthome  UUID=$(blkid -s UUID -o value $HOME_PART)  /root/home.key  luks" >>/mnt/etc/crypttab
+
+# Ensure the key file is included in the initramfs
+echo "Adding key file to initramfs..."
+sed -i '/^FILES=/ s/)/ \/root\/home.key)/' /mnt/etc/mkinitcpio.conf
+
+# Update mkinitcpio HOOKS to replace 'filesystems' with 'encrypt btrfs'
 echo "Updating mkinitcpio hooks..."
-sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block encrypt btrfs keyboard keymap consolefont fsck)/' /etc/mkinitcpio.conf
+sed -i '/^HOOKS=/ s/\bfilesystems\b/encrypt btrfs/' /etc/mkinitcpio.conf
 mkinitcpio -P
+
+# Ensure autoboot via passkey for root decryption
+echo "Configuring autoboot via passkey for root decryption..."
+bash utils/setautobootkey.sh sdb3 "${CONFIG_VALUES["LUKS Password"]}"
 
 # Set root password
 echo "Setting root password..."
-echo "root:$ROOT_PASS" | chpasswd
+echo "root:${CONFIG_VALUES["Root Password"]}" | chpasswd
 
-# Create user and set password
-echo "Creating user $USERNAME..."
-useradd -m -G wheel -s /bin/bash "$USERNAME"
-echo "$USERNAME:$ROOT_PASS" | chpasswd
+# Create user
+echo "Creating user ${CONFIG_VALUES["Username"]}..."
+useradd -m -G wheel -s /bin/bash "${CONFIG_VALUES["Username"]}"
 
 # Ensure user has sudo privileges
 echo "Configuring sudo privileges..."
-sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+sed -i 's/^# %wheel ALL=(ALL:ALL) NOPASSWD ALL/%wheel ALL=(ALL:ALL) NOPASSWD ALL/' /etc/sudoers
 
 # Set hostname
 echo "Setting hostname..."
-echo "$HOSTNAME" > /etc/hostname
+echo "${CONFIG_VALUES["Hostname"]}" >/etc/hostname
 
 # Configure /etc/hosts
 echo "Configuring /etc/hosts..."
-cat <<EOF > /etc/hosts
+cat <<EOF >/etc/hosts
 127.0.0.1 localhost
 ::1       localhost
-127.0.1.1 $HOSTNAME
+127.0.1.1 ${CONFIG_VALUES["Hostname"]}
 EOF
 
 # Configure locale
 echo "Configuring locale..."
-echo "LANG=en_AU.UTF-8" > /etc/locale.conf
-echo "LC_ALL=en_AU.UTF-8" >> /etc/locale.conf
-echo "en_AU.UTF-8 UTF-8" >> /etc/locale.gen
+echo "LANG=en_AU.UTF-8" >/etc/locale.conf
+echo "LC_ALL=en_AU.UTF-8" >>/etc/locale.conf
+echo "en_AU.UTF-8 UTF-8" >>/etc/locale.gen
 locale-gen
 
 # Set timezone and sync hardware clock
@@ -183,420 +348,55 @@ hwclock --systohc
 
 # Update and install necessary packages
 echo "Installing essential packages..."
-pacman -Sy --noconfirm grub efibootmgr dosfstools os-prober mtools fuse3
+pacman -Sy --noconfirm grub efibootmgr dosfstools os-prober mtools fuse3 zsh
 
 # Mount EFI partition and install GRUB
 echo "Installing GRUB bootloader..."
-mkdir -p /boot/efi
-mount "$BOOT_PART" /boot/efi
 grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
 
 # Ensure cryptdevice is in GRUB boot parameters
 echo "Configuring GRUB for LUKS..."
-sed -i "s|GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"cryptdevice=UUID=$(blkid -s UUID -o value $ROOT_PART):cryptroot root=/dev/mapper/cryptroot\"|" /etc/default/grub
+sed -i 's/GRUB_CMDLINE_LINUX="\(.*\)"/GRUB_CMDLINE_LINUX="\1 cryptdevice=UUID=$(blkid -s UUID -o value $ROOT_PART):cryptroot root=\/dev\/mapper\/cryptroot"/g' /etc/default/grub
+
 grub-mkconfig -o /boot/grub/grub.cfg
 
 # Backup the EFI file as a failsafe
-mkdir /boot/efi/EFI/BOOT 
+mkdir /boot/efi/EFI/BOOT
 cp /boot/efi/EFI/GRUB/grubx64.efi /boot/efi/EFI/BOOT/BOOTX64.EFI
 
-# Ensure internet
-sudo systemctl enable --now NetworkManager.service
+# Change shell to zsh
+echo "Changing shell to zsh..."
+chsh -s /bin/zsh
 
-# Update keymap
-echo "KEYMAP=us" | sudo tee /etc/vconsole.conf
+# Ensure the post install script executes once
+echo "Creating post-install script runner..."
+ZSHRC="/home/${CONFIG_VALUES["Username"]}/.zshrc"
 
-# Install essential packages
-sudo pacman -Syu --needed xdg-user-dirs alsa-firmware alsa-utils pipewire pipewire-alsa pipewire-pulse \
-    pipewire-jack wireplumber wget git intel-ucode fuse2 lshw powertop inxi acpi plasma sddm dolphin konsole tree
+# Create the target script
+cat <<EOF >$ZSHRC
+# Launch the post install script
+sudo bash /home/${CONFIG_VALUES["Username"]}/Scratch/sysgen/main.sh post-install
+mv /home/${CONFIG_VALUES["Username"]}/Scratch/sysgen/main.sh /home/${CONFIG_VALUES["Username"]}/Scratch/sysgen/main.sh.done
 
-# Create additional user directories
-mkdir -p ~/Workspace ~/Backups ~/Archives ~/Scratch ~/Scripts ~/Games ~/Designs ~/Echos
-
-# Create primary user dirs
-xdg-user-dirs-update && ls
-
-# Enable display manager
-sudo systemctl enable --now sddm
-
-# Retrieve and filter the latest pacman mirrorlist
-sudo pacman -S --needed reflector
-sudo reflector --verbose -c India -c China -c Japan -c Singapore -c US --protocol https --sort rate --latest 20 \
-    --download-timeout 45 --threads 5 --save /etc/pacman.d/mirrorlist
-sudo systemctl enable reflector.timer
-
-# Disable KDE duplicate dunst activation
-sudo mv /usr/share/dbus-1/services/org.kde.plasma.Notifications.service \
-    /usr/share/dbus-1/services/org.kde.plasma.Notifications.service.disabled
-
-# Bootloader theme setup
-git clone --depth 1 https://github.com/shashotoNur/grub-dark-theme
-sudo cp -r grub-dark-theme/theme /boot/grub/themes/
-sudo sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=1/' /etc/default/grub
-sudo sed -i 's|^#\?GRUB_THEME=.*|GRUB_THEME="/boot/grub/themes/theme/theme.txt"|' /etc/default/grub
-sudo grub-mkconfig -o /boot/grub/grub.cfg
-
-# Network configurations
-sudo pacman -S --needed resolvconf nm-connection-editor networkmanager-openvpn
-sudo systemctl enable systemd-resolved.service
-sudo ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
-sudo systemctl enable --now wpa_supplicant.service
-
-# Update system and keyring
-sudo pacman -S --needed archlinux-keyring
-sudo pacman-key --init && sudo pacman-key --populate archlinux
-sudo pacman-key --refresh-keys
-sudo pacman -Syu
-
-# Setup Flatpak
-sudo pacman -S --needed flatpak
-flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-sudo rm -rf /var/tmp/flatpak-cache-*
-flatpak uninstall --unused
-
-# Setup shell and terminal
-sudo pacman -S --needed zsh
-zsh /usr/share/zsh/functions/Newuser/zsh-newuser-install -f
-chsh -s $(which zsh)
-sh -c "$(wget -O- https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
-
-ZSH_CUSTOM=${ZSH_CUSTOM:-~/.oh-my-zsh/custom}
-git clone --depth 1 https://github.com/zsh-users/zsh-syntax-highlighting.git $ZSH_CUSTOM/plugins/zsh-syntax-highlighting
-git clone --depth 1 https://github.com/zsh-users/zsh-autosuggestions $ZSH_CUSTOM/plugins/zsh-autosuggestions
-sudo git clone --depth 1 https://github.com/agkozak/zsh-z $ZSH_CUSTOM/plugins/zsh-z
-git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf && ~/.fzf/install
-sudo git clone --depth 1 https://github.com/MichaelAquilina/zsh-you-should-use.git $ZSH_CUSTOM/plugins/you-should-use
-git clone --depth=1 https://github.com/romkatv/powerlevel10k.git $ZSH_CUSTOM/themes/powerlevel10k
-zsh <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
-cd ~/.config/fastfetch/pngs && find . -type f ! -name "arch.png" -delete
-sudo git clone https://github.com/MichaelAquilina/zsh-auto-notify.git $ZSH_CUSTOM/plugins/auto-notify
-
-# Install required apps and packages (Pacman)
-sudo pacman -S --needed intel-media-driver grub-btrfs nodejs npm fortune-mod cowsay lolcat jrnl inotify-tools supertux \
-    testdisk bat ripgrep bandwhich oath-toolkit asciinema neovim hexyl syncthing thefuck duf procs sl cmatrix gum \
-    gnome-keyring dnsmasq dmenu btop eza hdparm tmux telegram-desktop ddgr less sshfs onefetch tmate navi code \
-    nethogs tldr gping detox fastfetch bitwarden yazi direnv xorg-xhost rclone fwupd bleachbit picard timeshift \
-    jp2a gparted obs-studio veracrypt rust aspell-en libmythes mythes-en languagetool pacseek kolourpaint kicad \
-    kdeconnect cpu-x github-cli kolourpaint kalarm cpufetch kate plasma-browser-integration ark okular kamera \
-    krename ipython filelight kdegraphics-thumbnailers qt5-imageformats kimageformats espeak-ng
-
-# Install required apps and packages (Yay)
-yay -S --needed ventoy-bin steghide go pkgx-git stacer-git nsnake gpufetch nudoku arch-update mongodb-bin \
-    hyprland-qtutils pet-git musikcube tauon-music-box hollywood no-more-secrets nodejs-mapscii noti megasync-bin \
-    mongodb-compass smassh affine-bin solidtime-bin ngrok scc rmtrash nomacs cbonsai vrms-arch-git browsh timer \
-    sql-studio-bin posting lowfi dooit
-
-# Install required apps and packages (Flatpak)
-flatpak install -y com.github.tchx84.Flatseal io.ente.auth com.notesnook.Notesnook us.zoom.Zoom \
-    org.speedcrunch.SpeedCrunch net.scribus.Scribus org.kiwix.desktop org.localsend.localsend_app \
-    com.felipekinoshita.Wildcard io.github.prateekmedia.appimagepool com.protonvpn.www org.librecad.librecad \
-    dev.fredol.open-tv org.kde.krita com.opera.Opera org.audacityteam.Audacity com.usebottles.bottles \
-    io.github.zen_browser.zen org.torproject.torbrowser-launcher org.qbittorrent.qBittorrent \
-    org.onlyoffice.desktopeditors org.blender.Blender org.kde.labplot2 org.kde.kwordquiz org.kde.kamoso \
-    org.kde.skrooge org.kde.kdenlive
-
-# Initialize browser
-sudo pacman -S --needed firefox-developer-edition
-echo "browser=firefox-developer-edition" >> ~/.config/hypr/keybindings.conf
-
-# Configure zram
-sudo systemctl enable --now zram
-
-# Configure HDD performance
-sudo systemctl enable --now hdparm.service
-sudo hdparm -W 1 /dev/sda
-
-# Firmware updates
-yes | fwupdmgr get-updates
-
-# Enable Paccache
-sudo pacman -S --needed pacman-contrib
-sudo systemctl enable paccache.timer
-
-# Enable system commands for kernel
-echo 'kernel.sysrq=1' | sudo tee /etc/sysctl.d/99-reisub.conf
-
-# Configure network time protocol
-sudo pacman -S --needed openntpd
-sudo systemctl disable --now systemd-timesyncd
-sudo systemctl enable openntpd
-
-# HDMI Sharing
-echo 'monitor = ,preferred,auto,1,mirror,eDP-1' >> ~/.config/hypr/hyprland.conf
-
-echo "Starting system optimizations..."
-
-# Limit journal size
-echo "Configuring systemd journal size..."
-sudo sed -i '/^#SystemMaxUse=/c\SystemMaxUse=256M' /etc/systemd/journald.conf
-sudo sed -i '/^#MaxRetentionSec=/c\MaxRetentionSec=2weeks' /etc/systemd/journald.conf
-sudo sed -i '/^#MaxFileSec=/c\MaxFileSec=1month' /etc/systemd/journald.conf
-sudo sed -i '/^#Audit=/c\Audit=yes' /etc/systemd/journald.conf
-sudo systemctl restart systemd-journald
-
-# Disable core dump
-echo "Disabling core dumps..."
-echo 'kernel.core_pattern=/dev/null' | sudo tee /etc/sysctl.d/50-coredump.conf
-sudo sysctl -p /etc/sysctl.d/50-coredump.conf
-
-# Prevent overheating
-echo "Installing and configuring thermald..."
-yay -S --needed --noconfirm thermald
-sudo sed -i 's|ExecStart=.*|ExecStart=/usr/bin/thermald --no-daemon --dbus-enable --ignore-cpuid-check|' /usr/lib/systemd/system/thermald.service
-sudo systemctl enable --now thermald
-
-# Risky CPU optimization
-echo "Applying CPU optimizations..."
-sudo sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX="mitigations=off"|' /etc/default/grub
-sudo grub-mkconfig -o /boot/grub/grub.cfg
-
-# Optimize network congestion algorithm
-echo "Enabling BBR TCP congestion control..."
-echo 'net.ipv4.tcp_congestion_control=bbr' | sudo tee /etc/sysctl.d/98-misc.conf
-sudo sysctl -p /etc/sysctl.d/98-misc.conf
-
-# Setup firewall
-echo "Installing and configuring UFW..."
-sudo pacman -S --noconfirm ufw
-sudo ufw limit 22/tcp
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw allow 1714:1764/udp
-sudo ufw allow 1714:1764/tcp
-sudo systemctl enable --now ufw
-sudo ufw enable
-
-# Setup Bluetooth
-echo "Installing and enabling Bluetooth services..."
-sudo pacman -S --noconfirm bluez bluez-utils blueman
-sudo modprobe btusb
-sudo systemctl enable --now bluetooth
-rfkill unblock bluetooth
-
-# Enable graphics driver
-echo "Installing and configuring NVIDIA drivers..."
-sudo pacman -S --needed --noconfirm nvidia-prime nvidia-dkms nvidia-settings nvidia-utils lib32-nvidia-utils lib32-opencl-nvidia opencl-nvidia libvdpau lib32-libvdpau libxnvctrl vulkan-icd-loader lib32-vulkan-icd-loader vkd3d lib32-vkd3d opencl-headers opencl-clhpp vulkan-validation-layers lib32-vulkan-validation-layers
-sudo systemctl enable nvidia-persistenced.service
-sudo sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="echolevel=3 quiet splash nvidia_drm.modeset=1 retbleed=off spectre_v2=retpoline,force nowatchdog mitigations=off"|' /etc/default/grub
-sudo grub-mkconfig -o /boot/grub/grub.cfg
-echo "MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)" | sudo tee -a /etc/mkinitcpio.conf
-sudo mkinitcpio -P
-echo "NVIDIA setup completed. Verify with: cat /sys/module/nvidia_drm/parameters/modeset"
-
-# Memory management
-echo "Enabling systemd OOMD..."
-sudo systemctl enable --now systemd-oomd
-sudo bash -c 'cat << EOF > /etc/systemd/system.conf
-[Manager]
-DefaultCPUAccounting=yes
-DefaultIOAccounting=yes
-DefaultMemoryAccounting=yes
-DefaultTasksAccounting=yes
-EOF'
-sudo bash -c 'cat << EOF > /etc/systemd/oomd.conf
-[OOM]
-SwapUsedLimitPercent=90%
-DefaultMemoryPressureDurationSec=20s
-EOF'
-
-# Setup Avro keyboard
-echo "Installing and configuring Avro keyboard..."
-yay -S --noconfirm ibus-avro-git
-ibus-daemon -rxRd
-echo -e "GTK_IM_MODULE=ibus\nQT_IM_MODULE=ibus\nXMODIFIERS=@im=ibus" | sudo tee -a /etc/environment
-mkdir -p ~/.config/hypr
-echo '#!/bin/bash
-[ "$(ibus engine)" = "xkb:us::eng" ] && ibus engine ibus-avro || ibus engine xkb:us::eng' > ~/.config/hypr/toggle_ibus.sh
-chmod +x ~/.config/hypr/toggle_ibus.sh
-echo 'bind=SUPER,SPACE,exec,~/.config/hypr/toggle_ibus.sh' >> ~/.config/hypr/hyprland.conf
-hyprctl reload
-
-# Set default brightness
-echo "Configuring brightness service..."
-sudo bash -c 'cat << EOF > /etc/systemd/system/set-brightness.service
-[Unit]
-Description=Set screen brightness to 5% at startup
-After=multi-user.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/bash -c "echo 50 > /sys/class/backlight/intel_backlight/brightness"
-
-[Install]
-WantedBy=multi-user.target
-EOF'
-sudo systemctl enable --now set-brightness.service
-
-# Download IPTV list
-echo "Downloading IPTV playlist..."
-wget -c https://iptv-org.github.io/iptv/index.m3u
-
-# Setup VS Code extensions
-echo "Installing VS Code extensions..."
-if [ -f ext_list.txt ]; then
-    while IFS= read -r extension; do
-        code --install-extension "$extension" || echo "Error installing $extension"
-    done < ext_list.txt
-else
-    echo "ext_list.txt not found, skipping..."
-fi
-
-# Setup preload
-echo "Installing preload..."
-yay -S --noconfirm preload
-sudo systemctl enable --now preload
-
-# Configure jrnl
-echo "Setting up jrnl configuration..."
-mkdir -p ~/.config/jrnl
-echo -e "colors:\n  body: none\n  date: black\n  tags: yellow\n  title: cyan\ndefault_hour: 9\ndefault_minute: 0\neditor: 'nvim'\nencrypt: false\nhighlight: true\nindent_character: '|'\njournals:\n  default:\n    journal: /home/axiom/Documents/data/journal.txt\nlinewrap: 79\ntagsymbols: '#@'\ntemplate: false\ntimeformat: '%F %r'\nversion: v4.2" > ~/.config/jrnl/jrnl.yaml
-
-# Gnome-keyring PAM initialization
-echo "Configuring PAM for GNOME Keyring..."
-echo -e "auth       optional     pam_gnome_keyring.so\nsession    optional     pam_gnome_keyring.so auto_start" | sudo tee -a /etc/pam.d/login
-
-# Install pip and disable global package install restriction
-echo "Installing pip..."
-sudo pacman -S --needed python-pip
-sudo mv /usr/lib/python3.12/EXTERNALLY-MANAGED /usr/lib/python3.12/EXTERNALLY-MANAGED.old
-
-# Install makedown
-pip install makedown
-
-# Install diff-so-fancy and configure git
-echo "Installing diff-so-fancy..."
-npm i -g diff-so-fancy
-git config --global core.pager "diff-so-fancy | less --tabs=4 -RFX"
-git config --global interactive.diffFilter "diff-so-fancy --patch"
-git config --global color.ui true
-
-# Clone and set up Gemini console
-echo "Setting up Gemini console..."
-git clone --depth 1 https://github.com/flameface/gemini-console-chat.git ~/Scripts/
-cd ~/Scripts/gemini-console-chat
-npm install
-sed -i 's/YOUR_API_KEY/$GEMINI_API_KEY/' index.js
-
-# Configure TMUX
-echo "Configuring TMUX..."
-mkdir -p ~/.tmux/plugins
-git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
-cat <<EOF > ~/.tmux.conf
-unbind r
-bind r source-file ~/.tmux.conf
-
-set -g default-terminal "tmux-256color"
-set -ag terminal-overrides ",xterm-256color:RGB"
-
-set -g prefix C-s
-
-set -g mouse on
-
-set-window-option -g mode-keys vi
-
-bind-key h select-pane -L
-bind-key j select-pane -D
-bind-key k select-pane -U
-bind-key l select-pane -R
-
-set-option -g status-position top
-
-set -g @catppuccin_window_status_style "rounded"
-
-set -g @plugin 'tmux-plugins/tpm'
-set -g @plugin 'christoomey/vim-tmux-navigator'
-set -g @plugin 'catppuccin/tmux#v2.1.0'
-
-set -g status-left ""
-set -g status-right "#{E:@catppuccin_status_application} #{E:@catppuccin_status_session}"
-
-run '~/.tmux/plugins/tpm/tpm'
-
-set -g status-style bg=default
+# Remove self (to avoid running more than once)
+sudo rm "$ZSHRC"
 EOF
 
-# Configure Syncthing
-echo "Configuring Syncthing..."
-echo "[Unit]
-Description=Syncthing - Open Source Continuous File Synchronization for %I
-Documentation=man:syncthing(1)
-After=network.target
-StartLimitIntervalSec=60
-StartLimitBurst=4
+# Mount the drive
+STORAGE_MOUNT="/mnt/storage"
+mkdir -p $STORAGE_MOUNT
+if ! mount /dev/sdb3 $STORAGE_MOUNT; then
+    echo "Error: Failed to mount sdb3."
+    exit 1
+fi
 
-[Service]
-User=%i
-ExecStart=/usr/bin/syncthing serve --no-browser --no-restart --logflags=0
-Restart=on-failure
-RestartSec=1
-SuccessExitStatus=3 4
-RestartForceExitStatus=3 4
+# Copy the script directory
+if ! cp -r /backup/sysgen /home/${CONFIG_VALUES["Username"]}/Scratch/; then
+    echo "Error: Failed to copy the backup directory."
+    exit 1
+fi
 
-ProtectSystem=full
-PrivateTmp=true
-SystemCallArchitectures=native
-MemoryDenyWriteExecute=true
-NoNewPrivileges=true
-
-[Install]
-WantedBy=multi-user.target" | sudo tee /etc/systemd/system/syncthing@axiom.service
-sudo systemctl enable --now syncthing@axiom.service
-
-# Install AppImageLauncher
-yay -S --needed appimagelauncher-bin
-
-# Install gaming packages
-echo "Installing gaming packages..."
-sudo pacman -S --needed gamemode lib32-gamemode gamescope
-sudo pacman -S --needed wine wine-gecko wine-mono && sudo systemctl restart systemd-binfmt
-sudo pacman -S --needed fluidsynth lib32-fluidsynth gvfs gvfs-nfs libkate gst-plugins-good gst-plugins-bad gst-libav lib32-gst-plugins-good gst-plugin-gtk lib32-gstreamer lib32-gst-plugins-base-libs lib32-libxvmc libxvmc smpeg faac x264 lib32-pipewire pipewire-zeroconf mac lib32-opencl-icd-loader
-
-# Configure Git with credentials
-echo "Configuring Git..."
-git config --global user.name "Shashoto Nur"
-git config --global user.email "shashoto.nur@proton.me"
-git config --global core.editor "nvim"
-
-ssh-keygen -t ed25519 -C "shashoto.nur@proton.me"
-cat ~/.ssh/id_ed25519.pub
-
-eval `ssh-agent -s`
-ssh-add ~/.ssh/id_ed25519
-
-# Configure GPG for signing
-echo "Configuring GPG for commit signing..."
-gpg --import public-key.asc
-gpg --import private-key.asc
-SIGNING_KEY=$(gpg --list-secret-keys --keyid-format=long | awk '/sec/{getline; print $1}')
-git config --global user.signingkey $SIGNING_KEY
-
-# Import Github repositories
-git clone --depth 1 git@github.com:shashotoNur/clone-repos.git ~/Workspace
-
-echo "Fetching Wikipedia archive..."
-BASE_URL="https://dumps.wikimedia.org/other/kiwix/zim/wikipedia/"
-LATEST_FILE=$(curl -s "$BASE_URL" | grep -oP "wikipedia_en_all_maxi_\d{4}-\d{2}.zim" | sort -t'_' -k4,4 -r | head -n 1)
-wget -c "$BASE_URL/$LATEST_FILE"
-
-# Setup Timeshift for backups
-echo "Configuring Timeshift..."
-sudo systemctl enable --now cronie.service
-sudo /etc/grub.d/41_snapshots-btrfs
-sudo grub-mkconfig -o /boot/grub/grub.cfg
-sudo systemctl enable --now grub-btrfsd
-sudo systemctl edit --full grub-btrfsd
-sed -i 's|ExecStart=.*|ExecStart=/usr/bin/grub-btrfsd --syslog --timeshift-auto|' /etc/systemd/system/grub-btrfsd.service
-
-# Add OneFileLinux to boot
-echo "Setting up OneFileLinux..."
-wget -O ~/Backups/ISOs/OneFileLinux.efi "https://github.com/zhovner/OneFileLinux/releases/latest/download/OneFileLinux.efi"
-sudo cp ~/Backups/ISOs/OneFileLinux.efi /boot/efi/EFI/BOOT/
-echo 'menuentry "One File Linux" {
-  search --file --no-floppy --set=root /EFI/Boot/OneFileLinux.efi
-  chainloader /EFI/Boot/OneFileLinux.efi
-}' | sudo tee -a /etc/grub.d/40_custom
-sudo grub-mkconfig -o /boot/grub/grub.cfg
-
-echo "Post-installation setup completed successfully!"
+echo "Installation completed successfully."
+exit
+umount -R /mnt
+reboot

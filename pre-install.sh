@@ -149,7 +149,7 @@ mv ./*.asc ./backup/keys
 
 # Create storage partition on unallocated space
 echo "Creating storage partition..."
-parted -s "$USB_DEVICE" mkpart primary fat32 "${MULTIBOOT_SIZE_MB}MiB" 100%
+parted -s "$USB_DEVICE" mkpart primary btrfs "${MULTIBOOT_SIZE_MB}MiB" 100%
 
 if [[ -z "${USB_DEVICE}3" ]]; then
     echo "Error: Could not detect the storage partition."
@@ -158,7 +158,7 @@ fi
 
 # Format the storage partition as FAT32
 echo "Formatting "${USB_DEVICE}3" as FAT32 (STORAGE)..."
-mkfs.vfat -F32 "${USB_DEVICE}3" -n STORAGE
+mkfs.btrfs -L STORAGE "${USB_DEVICE}3"
 
 # Mount the partitions
 STORAGE_MOUNT="/mnt/storage"
