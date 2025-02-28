@@ -38,18 +38,19 @@ SELECTED="/tmp/fzf_selected"
 SIZE="/tmp/fzf_total"
 
 # Clear previous selections
-> "$SELECTED"
-> "$SIZE"
+>"$SELECTED"
+>"$SIZE"
 
 # Use fzf to select multiple files and directories
-SELECTED_ITEMS=$(find ~ -mindepth 1 -maxdepth 5 | fzf --multi --preview 'du -sh {}' \
-    --bind "space:execute-silent(
+SELECTED_ITEMS=$(
+    find ~ -mindepth 1 -maxdepth 5 | fzf --multi --preview 'du -sh {}' \
+        --bind "space:execute-silent(
         grep -Fxq {} $SELECTED && sed -i '\|^{}$|d' $SELECTED || echo {} >> $SELECTED;
         du -ch \$(cat $SELECTED 2>/dev/null) | grep total$ > $SIZE
     )+toggle" \
-    --bind "ctrl-r:execute-silent(truncate -s 0 $SELECTED; truncate -s 0 $SIZE)+reload(find ~ -mindepth 1 -maxdepth 5)" \
-    --preview 'cat /tmp/fzf_total' \
-    --bind "ctrl-a:execute-silent(find ~ -mindepth 1 -maxdepth 5 > $SELECTED; du -ch \$(cat $SELECTED) | grep total$ > $SIZE)+select-all"
+        --bind "ctrl-r:execute-silent(truncate -s 0 $SELECTED; truncate -s 0 $SIZE)+reload(find ~ -mindepth 1 -maxdepth 5)" \
+        --preview 'cat /tmp/fzf_total' \
+        --bind "ctrl-a:execute-silent(find ~ -mindepth 1 -maxdepth 5 > $SELECTED; du -ch \$(cat $SELECTED) | grep total$ > $SIZE)+select-all"
 )
 
 if [[ -z "$SELECTED_ITEMS" ]]; then
@@ -64,6 +65,16 @@ fi
 
 # Get the installation configurations
 bash utils/getconfig.sh
+
+# Get the mega sync directories
+read -p "Do you want to select directories to backup your MEGA sync data? (y/n): " choice
+
+if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+    echo "Select the directories you want to sync on MEGA."
+    find ~ -type d | fzf --multi >selected_directories.txt
+else
+    echo "MEGA sync backup selection skipped."
+fi
 
 # Check if the device has any mounted partitions
 MOUNTED_PARTITIONS=$(mount | grep "^$USB_DEVICE" | awk '{print $1}')
@@ -85,7 +96,7 @@ wipefs --all "$USB_DEVICE"
 # Get total size of USB in GB
 TOTAL_SIZE_GB=$(lsblk -b -n -o SIZE "$USB_DEVICE" | awk '{print $1/1024/1024/1024}')
 TOTAL_SIZE_MB=$(lsblk -b -n -o SIZE "$USB_DEVICE" | awk '{print $1/1024/1024}')
-TOTAL_SIZE_GB=${TOTAL_SIZE_GB%.*}  # Remove decimals
+TOTAL_SIZE_GB=${TOTAL_SIZE_GB%.*} # Remove decimals
 
 echo "Detected USB Size: ${TOTAL_SIZE_GB}GB"
 
@@ -99,8 +110,8 @@ while true; do
     fi
 done
 
-STORAGE_SIZE_MB=$(( STORAGE_SIZE_GB * 1024 ))
-MULTIBOOT_SIZE_MB=$(( TOTAL_SIZE_MB - STORAGE_SIZE_MB ))
+STORAGE_SIZE_MB=$((STORAGE_SIZE_GB * 1024))
+MULTIBOOT_SIZE_MB=$((TOTAL_SIZE_MB - STORAGE_SIZE_MB))
 
 echo "Storage Partition: ${STORAGE_SIZE_GB}GB (${STORAGE_SIZE_MB}MB)"
 echo "Multiboot Partition: $((TOTAL_SIZE_GB - STORAGE_SIZE_GB))GB (${MULTIBOOT_SIZE_MB}MB)"
@@ -108,13 +119,22 @@ echo "Multiboot Partition: $((TOTAL_SIZE_GB - STORAGE_SIZE_GB))GB (${MULTIBOOT_S
 # Backup VS Code extensions
 echo "Backing up VS Code settings and extensions..."
 mkdir -p ./backup/code
-sudo -u "$1" code --list-extensions > ./backup/code/ext_list.txt
+sudo -u "$1" code --list-extensions >./backup/code/ext.lst
 sudo cp /home/$1/.config/Code\ -\ OSS/User/settings.json ./backup/code
+
+# Backup dotfiles
+mkdir -p ./backup/dolphin
+cp ~/.local/share/kxmlgui5/dolphin/dolphinui.rc ./backup/dolphin
+cp ~/.config/dolphinrc ./backup/dolphin/
+mkdir -p ./backup/zsh/
+cp ~/.zshrc ./backup/zsh/
+mkdir -p ./backup/timeshift
+cp /etc/timeshift/timeshift.json ./backup/timeshift/
 
 # Create script directory
 SCRIPT_DIR="sysgen"
 mkdir -p "$SCRIPT_DIR"
-cp -r ./*.sh utils/ install_config.txt "$SCRIPT_DIR"
+cp -r ./*.sh utils/ install.conf "$SCRIPT_DIR"
 
 # Start a new tmux session for parallel jobs
 SESSION_NAME="system_generator"
@@ -140,7 +160,7 @@ tmux attach-session -t "$SESSION_NAME"
 
 # Check if the key files are empty
 if [ ! -s private.asc ] || [ ! -s public.asc ]; then
-  echo "Warning: At least one of the key files is empty!"
+    echo "Warning: At least one of the key files is empty!"
 fi
 
 # Move the key files to backup

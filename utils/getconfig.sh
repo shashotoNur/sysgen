@@ -2,7 +2,7 @@
 
 set -e  # Exit on error
 
-OUTPUT_FILE="install_config.txt"
+OUTPUT_FILE="install.conf"
 
 # Ask for user details
 read -p "Enter your full name: " FULL_NAME
@@ -90,6 +90,23 @@ else
     echo
 fi
 
+# Get Gemini API Key
+read -s -p "Enter Gemini API Key: " GEMINI_API_KEY
+echo
+
+# Get Mega Password and Key
+read -s -p "Enter Mega Password: " MEGA_PASSWORD
+echo
+read -s -p "Enter Mega Key: " MEGA_KEY
+echo
+
+# Get Music Playlist Link
+read -p "Enter Music Playlist Link: " MUSIC_PLAYLIST_LINK
+
+# Get Github Token
+read -s -p "Enter Github Token: " GITHUB_TOKEN
+echo
+
 # Save details to file
 {
     echo "Full Name: $FULL_NAME"
@@ -114,6 +131,11 @@ fi
         echo "LUKS Password: $LUKS_PASSWORD"
         echo "Root Password: $ROOT_PASSWORD"
     fi
+    echo "Gemini API Key: $GEMINI_API_KEY"
+    echo "Mega Password: $MEGA_PASSWORD"
+    echo "Mega Key: $MEGA_KEY"
+    echo "Music Playlist Link: $MUSIC_PLAYLIST_LINK"
+    echo "Github Token: $GITHUB_TOKEN"
 } > "$OUTPUT_FILE"
 
 echo "Installation configuration saved to $OUTPUT_FILE"
