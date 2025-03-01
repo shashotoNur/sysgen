@@ -148,8 +148,10 @@ tmux split-window -h -t "$SESSION_NAME"
 tmux send-keys -t "$SESSION_NAME" "echo 'Setting up Ventoy on $USB_DEVICE...'; yes | sudo ventoy -L MULTIBOOT -r $STORAGE_SIZE_MB -I $USB_DEVICE && exit" C-m
 
 # Pane 3: Export GPG keys
-tmux split-window -v -t "$SESSION_NAME"
-tmux send-keys -t "$SESSION_NAME" "echo 'Exporting GPG keys...'; gpg --export-secret-keys --pinentry-mode loopback --passphrase '$GPG_PASSPHRASE' > private.asc && gpg --export --armor > public.asc && exit" C-m
+if [[ -n "$GPG_PASSPHRASE" ]]; then
+    tmux split-window -v -t "$SESSION_NAME"
+    tmux send-keys -t "$SESSION_NAME" "echo 'Exporting GPG keys...'; gpg --export-secret-keys --pinentry-mode loopback --passphrase '$GPG_PASSPHRASE' > private.asc && gpg --export --armor > public.asc && exit" C-m
+fi
 
 # Pane 4: Copy the selected files for backup
 tmux split-window -h -t "$SESSION_NAME"
@@ -196,7 +198,7 @@ echo "Copying backup to the USB drive..."
 cp -r "$SCRIPT_DIR" backup
 cp -r backup "$STORAGE_MOUNT"
 
-sudo rm -rf archiso iso work out backup "$SCRIPT_DIR"
+sudo rm -rf archiso iso work out backup "$SCRIPT_DIR" ./*.lst ./*.conf
 
 # Create Ventoy config directory if it doesn't exist
 mkdir -p "$MULTIBOOT_MOUNT/ventoy"
@@ -243,18 +245,10 @@ if [[ "${CONFIG_VALUES["Local Installation"]}" == "y" ]]; then
     sudo efibootmgr --bootnext "$USB_BOOT_NUM"
     systemctl reboot
 else
-    # Check if the device has any mounted partitions
-    MOUNTED_PARTITIONS=$(mount | grep "^$USB_DEVICE" | awk '{print $1}')
+    # Unmount the partitions
+    echo "Unmounting the storage and multiboot partitions..."
+    sudo umount "$STORAGE_MOUNT" || sudo umount -f "$STORAGE_MOUNT"
+    sudo umount "$MULTIBOOT_MOUNT" || sudo umount -f "$MULTIBOOT_MOUNT"
 
-    if [[ -n "$MOUNTED_PARTITIONS" ]]; then
-        echo "Unmounting partitions on $USB_DEVICE..."
-        for PARTITION in $MOUNTED_PARTITIONS; do
-            sudo umount -l "$PARTITION" || sudo umount -f "$PARTITION"
-            echo "Unmounted: $PARTITION"
-        done
-    else
-        echo "$USB_DEVICE is not mounted."
-    fi
-
-    echo "You may unplug the USB drive and proceed with the installation."
+    echo "You may unplug the USB drive and proceed with the installation..."
 fi

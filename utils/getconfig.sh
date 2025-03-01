@@ -30,7 +30,7 @@ if [[ "$LOCAL_INSTALL" == "y" ]]; then
 
     DRIVE_SIZE=$RAW_SIZE
 else
-    read -p "Enter the size of the drive on the other device (e.g., 126G, 1T): " DRIVE_SIZE
+    read -p "Enter the size of the drive on the other device (e.g., 128G, 1T): " DRIVE_SIZE
     SIZE_UNIT=${DRIVE_SIZE: -1}
     SIZE_NUM=${DRIVE_SIZE::-1}
 
@@ -48,8 +48,7 @@ get_partition_size() {
     local PART_SIZE
 
     while true; do
-        echo "Available space before $PART_NAME: ${AVAILABLE_SPACE} GiB"
-        read -p "Enter $PART_NAME partition size in GiB: " PART_SIZE
+        read -p "Enter $PART_NAME partition size in GiB (${AVAILABLE_SPACE} GiB left): " PART_SIZE
 
         if [[ "$PART_SIZE" =~ ^[0-9]+$ ]] && [[ "$PART_SIZE" -le "$AVAILABLE_SPACE" ]]; then
             AVAILABLE_SPACE=$((AVAILABLE_SPACE - PART_SIZE))  # Update global variable
@@ -97,7 +96,7 @@ echo
 # Get Mega Password and Key
 read -s -p "Enter Mega Password: " MEGA_PASSWORD
 echo
-read -s -p "Enter Mega Key: " MEGA_KEY
+read -s -p "Enter Mega TOTP Key: " MEGA_KEY
 echo
 
 # Get Music Playlist Link

@@ -15,17 +15,15 @@ mkdir -p "$PROFILE_DIR/airootfs/root/sysgen"
 cp -r "$ROOT_DIR/sysgen"/* "$PROFILE_DIR/airootfs/root/sysgen"
 
 # Ensure the script runs on boot
-echo "bash ./sysgen/install.sh" >> airootfs/root/.zshrc
+echo "cd ./sysgen && bash install.sh" >> "$PROFILE_DIR/airootfs/root.zshrc"
 
 # Define the path to loader.conf
 LOADER_CONF="$PROFILE_DIR/efiboot/loader/loader.conf"
 
 # Ensure the file exists before modifying
 if [[ -f "$LOADER_CONF" ]]; then
-    # Modify the timeout value
+    # Modify the timeout value and beep setting
     sed -i 's/^timeout .*/timeout 1/' "$LOADER_CONF"
-
-    # Modify the beep setting
     sed -i 's/^beep on$/beep off/' "$LOADER_CONF"
 
     echo "Updated $LOADER_CONF:"

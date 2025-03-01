@@ -34,14 +34,14 @@ if [[ -n "$PASSWORD" ]]; then
 fi
 
 # Check if DRIVE is only "/dev/"
-if [[ "${CONFIG_VALUES["DRIVE"]}" == "/dev/" ]]; then
+if [[ "${CONFIG_VALUES["Drive"]}" == "/dev/" || -z "${CONFIG_VALUES["Drive"]}" ]]; then
     echo "No drive specified. Please select a drive:"
 
     # List available drives (excluding partitions)
     DRIVE_SELECTION=$(lsblk -dpno NAME,SIZE | grep -E "/dev/sd|/dev/nvme|/dev/mmcblk" | fzf --prompt="Select a drive: " --height=10 --border --reverse | awk '{print $1}')
 
     if [[ -n "$DRIVE_SELECTION" ]]; then
-        CONFIG_VALUES["DRIVE"]="$DRIVE_SELECTION"
+        CONFIG_VALUES["Drive"]="$DRIVE_SELECTION"
         echo "Selected drive: ${CONFIG_VALUES["DRIVE"]}"
     else
         echo "No drive selected. Exiting."
@@ -67,11 +67,6 @@ fi
 echo "Wiping ${CONFIG_VALUES["Drive"]}..."
 wipefs --all --force "${CONFIG_VALUES["Drive"]}"
 
-# Partition the disk
-echo "Creating partitions..."
-parted -s "${CONFIG_VALUES["Drive"]}" mklabel gpt
-start_size=$(unit_to_bytes "1MiB") # Start at 1MiB in bytes
-
 # Function to convert MiB or GiB to bytes
 unit_to_bytes() {
     local u="$1"
@@ -93,6 +88,11 @@ bytes_to_mib() {
     local b="$1"
     echo "$(($b / (1024 * 1024)))MiB"
 }
+
+# Partition the disk
+echo "Creating partitions..."
+parted -s "${CONFIG_VALUES["Drive"]}" mklabel gpt
+start_size=$(unit_to_bytes "1MiB") # Start at 1MiB in bytes
 
 # Boot Partition
 boot_size=$(unit_to_bytes "${CONFIG_VALUES["Boot Partition"]}")
@@ -153,11 +153,11 @@ fi
 
 # Create Btrfs subvolumes
 echo "Creating Btrfs subvolumes..."
-mount -o compress=zstd,subvol=@ /dev/mapper/cryptroot /mnt
-mount /dev/mapper/cryptroot /mnt
+mount --mkdir /dev/mapper/cryptroot /mnt
+mount --mkdir /dev/mapper/crypthome /mnt/home
 btrfs subvolume create /mnt/@
-btrfs subvolume create /mnt/@home
-umount /mnt
+btrfs subvolume create /mnt/home/@home
+umount /mnt/home && umount /mnt
 
 # Mount subvolumes
 echo "Mounting subvolumes..."
@@ -269,11 +269,6 @@ cat /mnt/etc/fstab
 echo "Changing root..."
 arch-chroot /mnt /bin/bash
 
-# Ensure partitions are unlocked at boot
-echo "Configuring LUKS partitions to unlock at boot..."
-echo "cryptroot  UUID=$(blkid -s UUID -o value $ROOT_PART)  none  luks" >>/etc/crypttab
-echo "crypthome  UUID=$(blkid -s UUID -o value $HOME_PART)  none  luks" >>/etc/crypttab
-
 # Create a key file for the home partition
 echo "Creating key file for home partition..."
 dd if=/dev/urandom of=/mnt/root/home.key bs=512 count=4
@@ -283,8 +278,8 @@ chmod 600 /mnt/root/home.key
 echo "Adding key file to home partition..."
 echo -n "${CONFIG_VALUES["LUKS Password"]}" | cryptsetup luksAddKey "$HOME_PART" /mnt/root/home.key
 
-# Ensure the home partition is unlocked at boot using the key file
-echo "Configuring home partition to unlock at boot with key file..."
+# Ensure the home partition is unlocked by initramfs using the key file
+echo "Configuring home partition to be unlocked by initramfs using the key file..."
 echo "crypthome  UUID=$(blkid -s UUID -o value $HOME_PART)  /root/home.key  luks" >>/mnt/etc/crypttab
 
 # Ensure the key file is included in the initramfs
@@ -299,61 +294,37 @@ mkinitcpio -P
 # Ensure autoboot via passkey for root decryption
 echo "Configuring autoboot via passkey for root decryption..."
 
-USB_DEVICE="/dev/sdb3"
-USB_MOUNT="/mnt/usbkey" # Temporary mount point for USB
-KEY_FILE="luks-home.key"
+USB_DEVICE="$(lsblk -o NAME,TYPE,RM | grep -E 'disk.*1' | awk '{print "/dev/"$1}')3"
+USB_MOUNT="/mnt/usbkey"
+KEY_FILE="luks-root.key"
 KEYFILE_PATH="$USB_MOUNT/$KEY_FILE"
 
-LUKS_DEVICE="/dev/sda4" # LUKS-encrypted partition
-LUKS_NAME="home_crypt"  # Name for the decrypted LUKS mapping
-MOUNTPOINT="/home"      # Mount point for the decrypted partition
-BTRFS_SUBVOL="@home"    # Btrfs subvolume for home
-
-# Ensure dependencies are installed
-if ! command -v cryptsetup &>/dev/null; then
-    echo "cryptsetup is not installed. Install it with: sudo pacman -S cryptsetup"
-    exit 1
-fi
+LUKS_DEVICE="${CONFIG_VALUES["Drive"]}2" # LUKS-encrypted partition
+LUKS_NAME="cryptroot"                    # Name for the decrypted LUKS mapping
 
 # Create a mount point for the USB if it doesn't exist
 mkdir -p "$USB_MOUNT"
 
 # Mount the USB drive
 echo "Mounting USB drive..."
-sudo mount "$USB_DEVICE" "$USB_MOUNT"
+mount "$USB_DEVICE" "$USB_MOUNT"
 
 # Generate a secure keyfile
 echo "Creating keyfile..."
-sudo dd if=/dev/urandom of="$KEYFILE_PATH" bs=512 count=4
-sudo chmod 600 "$KEYFILE_PATH"
+dd if=/dev/urandom of="$KEYFILE_PATH" bs=512 count=4
+chmod 600 "$KEYFILE_PATH"
 
 # Add keyfile to LUKS
 echo "Adding keyfile to LUKS..."
-echo -n "${CONFIG_VALUES["LUKS Password"]}" | sudo cryptsetup luksAddKey "$LUKS_DEVICE" "$KEYFILE_PATH"
+echo -n "${CONFIG_VALUES["LUKS Password"]}" | cryptsetup luksAddKey "$LUKS_DEVICE" "$KEYFILE_PATH"
 
 # Get UUIDs for fstab and GRUB config
 LUKS_UUID=$(blkid -s UUID -o value "$LUKS_DEVICE")
 USB_UUID=$(blkid -s UUID -o value "$USB_DEVICE")
 
-# Ensure fstab mounts the decrypted partition
-FSTAB_ENTRY="UUID=$LUKS_UUID $MOUNTPOINT btrfs defaults,noatime,compress=zstd,subvol=$BTRFS_SUBVOL 0 2"
-echo "Updating /etc/fstab..."
-grep -q "$LUKS_UUID" /etc/fstab || echo "$FSTAB_ENTRY" | sudo tee -a /etc/fstab
-
-# Ensure GRUB includes cryptdevice and cryptkey
-GRUB_CFG="/etc/default/grub"
-echo "Updating GRUB configuration..."
-sudo sed -i "s|GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"cryptdevice=UUID=$LUKS_UUID:$LUKS_NAME cryptkey=UUID=$USB_UUID:btrfs:/$KEY_FILE\"|" "$GRUB_CFG"
-
-# Regenerate GRUB config
-echo "Updating GRUB..."
-sudo grub-mkconfig -o /boot/grub/grub.cfg
-
 # Unmount the USB drive
 echo "Unmounting USB drive..."
-sudo umount "$USB_MOUNT"
-
-echo "LUKS keyfile setup complete!"
+umount "$USB_MOUNT"
 
 # Set root password
 echo "Setting root password..."
@@ -399,19 +370,24 @@ pacman -Sy --noconfirm grub efibootmgr dosfstools os-prober mtools fuse3 zsh
 echo "Installing GRUB bootloader..."
 grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
 
-# Ensure cryptdevice is in GRUB boot parameters
-echo "Configuring GRUB for LUKS..."
-sed -i 's/GRUB_CMDLINE_LINUX="\(.*\)"/GRUB_CMDLINE_LINUX="\1 cryptdevice=UUID=$(blkid -s UUID -o value $ROOT_PART):cryptroot root=\/dev\/mapper\/cryptroot"/g' /etc/default/grub
+# Ensure GRUB includes cryptdevice and cryptkey
+echo "Updating GRUB configuration..."
+GRUB_CFG="/etc/default/grub"
+sed -i "s|GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"cryptdevice=UUID=$LUKS_UUID:$LUKS_NAME cryptkey=UUID=$USB_UUID:btrfs:/$KEY_FILE root=\/dev\/mapper\/cryptroot\"|" "$GRUB_CFG"
 
 grub-mkconfig -o /boot/grub/grub.cfg
 
 # Backup the EFI file as a failsafe
-mkdir /boot/efi/EFI/BOOT
+mkdir -p /boot/efi/EFI/BOOT
 cp /boot/efi/EFI/GRUB/grubx64.efi /boot/efi/EFI/BOOT/BOOTX64.EFI
 
 # Change shell to zsh
 echo "Changing shell to zsh..."
 chsh -s /bin/zsh
+
+# Change user
+echo "Changing user to ${CONFIG_VALUES["Username"]}..."
+su ${CONFIG_VALUES["Username"]}
 
 # Ensure the post install script executes once
 echo "Creating post-install script runner..."
