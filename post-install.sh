@@ -36,8 +36,10 @@ nmcli device wifi connect ${CONFIG_VALUES["WiFi SSID"]} password ${CONFIG_VALUES
 # Update keymap
 echo "KEYMAP=us" | sudo tee /etc/vconsole.conf
 
-# Remove cryptkey boot parameter safely
+# Remove cryptkey boot parameter safely & delete the slot for keyfile
 sudo sed -i 's/ cryptkey=UUID=[^ ]*\( \|"\)/\1/g' /etc/default/grub
+SECOND_SLOT=1  # slots start from zero; first slot is for passphrase
+sudo cryptsetup luksKillSlot "${CONFIG_VALUES["Drive"]}2" $SECOND_SLOT
 
 # Set up the system clock
 sudo localectl set-locale LANG=en_AU.UTF-8
@@ -132,7 +134,7 @@ sudo pacman -S --needed --noconfirm intel-media-driver grub-btrfs nodejs npm for
     nethogs tldr gping detox fastfetch bitwarden yazi aria2 direnv xorg-xhost rclone fwupd bleachbit picard timeshift \
     jp2a gparted obs-studio veracrypt rust aspell-en libmythes mythes-en languagetool pacseek kolourpaint kicad \
     kdeconnect cpu-x github-cli kolourpaint kalarm cpufetch kate plasma-browser-integration ark okular kamera \
-    krename ipython filelight kdegraphics-thumbnailers qt5-imageformats kimageformats espeak-ng armagetronad
+    krename ipython filelight kdegraphics-thumbnailers qt5-imageformats mdless kimageformats espeak-ng armagetronad
 
 # Install required apps and packages (Yay)
 yay -S --needed --noconfirm ventoy-bin steghide go pkgx-git stacer-git nsnake gpufetch nudoku arch-update mongodb-bin \
@@ -698,7 +700,7 @@ else
         echo "Starting download for: $TORRENT_FILE"
         aria2c --dir=~/Scratch/ --seed-time=0 --follow-torrent=mem --max-concurrent-downloads=5 \
             --bt-max-peers=50 --bt-tracker-connect-timeout=10 --bt-tracker-timeout=10 \
-            --bt-tracker-interval=60 "$TORRENT_FILE"
+            --bt-tracker-interval=60 --bt-stop-timeout=300 "$TORRENT_FILE"
     done
     echo "All downloads completed."
 fi
@@ -709,7 +711,7 @@ sudo cp .config/hyde/themes/Catppuccin\ Mocha/wallpapers/cat_leaves.png /usr/sha
 # Set user password
 echo "${CONFIG_VALUES["Username"]}:${CONFIG_VALUES["Root Password"]}" | sudo chpasswd
 
-# Set up MegaSync
+# Set up Mega CMD for background synchronization
 yay -S megacmd-bin ffmpeg-compat-59 --needed --noconfirm
 
 time_step=30
@@ -773,15 +775,15 @@ fastfetch >~/Logs/overview.log
 
 # Write the remaining setup steps
 echo "TODO:
-1. Add ~/Scratch/ublock-ytshorts.txt to ublock filters
+1. Paste \`cat ~/Scratch/ublock-ytshorts.txt | wl-copy\` to ublock filters
 2. Setup GUI apps:
     Log into *Bitwarden*, *Notesnook*, *Ente Auth* and *Mega*
     Configure *KDE Connect*, *Telegram*, *ProtonVPN*, *Zoom*, *Open TV*, *Veracrypt*
-3. Copy ssh key: cat ~/.ssh/id_ed25519.pub | wl-copy and add it at https://github.com/settings/keys
-4. Check the files obtained over torrents
-5. Install NixOS on QEMU-KVM
-" > ~/Documents/remaining_setup.txt
+3. Paste \`cat ~/.ssh/id_ed25519.pub | wl-copy\` at https://github.com/settings/keys
+4. Check the files obtained over torrents: \`ls ~/Scratch\`
+5. Install NixOS on QEMU-KVM: \`cd ~/Workspace/ && qemu-system-x86_64 -enable-kvm -cdrom ~/Backups/ISOs/$ISO_FILE -boot menu=on -drive file=virtdisk.img -m 4G -cpu host -vga virtio -display sdl,gl=on\`
+" > ~/Documents/remaining_setup.md
 
-# Shut down the system
-echo "Bye bye!"
-poweroff
+# Exit the script (let the zshrc complete)
+echo "Exiting the post install script."
+exit 0

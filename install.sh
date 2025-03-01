@@ -20,7 +20,7 @@ extract_value() {
 
 # Read configuration values
 declare -A CONFIG_VALUES
-for key in "Full Name" "Email" "Username" "Hostname" "Local Installation" "Drive" "Drive Size" \
+for key in "Username" "Hostname" "Drive" \
     "Boot Partition" "Root Partition" "Swap Partition" "Home Partition" "Network Type" \
     "Password" "LUKS Password" "Root Password" "WiFi SSID" "WiFi Password"; do
     CONFIG_VALUES["$key"]=$(extract_value "$key")
@@ -425,6 +425,9 @@ mv /home/${CONFIG_VALUES["Username"]}/Scratch/sysgen/main.sh /home/${CONFIG_VALU
 
 # Remove self (to avoid running more than once)
 sudo rm "$ZSHRC"
+
+echo "Bye bye!"
+poweroff
 EOF
 
 # Mount the drive

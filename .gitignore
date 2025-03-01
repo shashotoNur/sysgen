@@ -1,12 +1,12 @@
-# Ignore ISO files and their signatures
-*.iso
-*.sig
-
-# Ignore the key files
+# Ignore the key, configuration files and lists
 *.asc
+*.conf
+*.lst
 
-# Ignore the backup directory
+# Ignore the temporarily generated directories
 backup/
 archiso/
 sysgen/
 iso/
+work/
+out/
