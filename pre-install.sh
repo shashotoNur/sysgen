@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Ensure required commands are available
-for cmd in wget sed xargs du ventoy tmux mkarchiso lsblk fzf mkfs.vfat mkfs.btrfs parted; do
+for cmd in ventoy tmux mkarchiso fzf mkfs.vfat mkfs.btrfs; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "Error: '$cmd' is not installed. Please install it before proceeding."
         exit 1
@@ -65,6 +65,19 @@ fi
 
 # Get the installation configurations
 bash utils/getconfig.sh
+
+CONFIG_FILE="install.conf"
+
+# Function to extract values
+extract_value() {
+    grep -E "^$1:" "$CONFIG_FILE" | awk -F': ' '{print $2}'
+}
+
+# Read configuration values
+declare -A CONFIG_VALUES
+for key in "Local Installation"; do
+    CONFIG_VALUES["$key"]=$(extract_value "$key")
+done
 
 # Get the mega sync directories
 read -p "Do you want to select directories to backup your MEGA sync data? (y/n): " choice
@@ -155,7 +168,7 @@ fi
 
 # Pane 4: Copy the selected files for backup
 tmux split-window -h -t "$SESSION_NAME"
-tmux send-keys -t "$SESSION_NAME" "echo 'Moving files...'; mkdir -p \"$DATA_DIR\"; mv -t \"$DATA_DIR\" $(printf '%s\0' \"${SELECTED_ITEMS[@]}\") && echo 'Move complete!' && exit" C-m
+tmux send-keys -t "$SESSION_NAME" "echo 'Moving files...'; mkdir -p \"$DATA_DIR\"; cp -r --parents $(printf '%s\n' \"${SELECTED_ITEMS[@]}\") \"$DATA_DIR\"; echo 'Move complete!' && exit" C-m
 
 # Attach to the tmux session and wait for user to close panes
 tmux attach-session -t "$SESSION_NAME"
@@ -214,19 +227,6 @@ cat <<EOF | sudo tee "$MULTIBOOT_MOUNT/ventoy/ventoy.json"
 EOF
 
 echo "Ventoy is configured to boot the first ISO in normal mode automatically!"
-
-CONFIG_FILE="install.conf"
-
-# Function to extract values
-extract_value() {
-    grep -E "^$1:" "$CONFIG_FILE" | awk -F': ' '{print $2}'
-}
-
-# Read configuration values
-declare -A CONFIG_VALUES
-for key in "Local Installation"; do
-    CONFIG_VALUES["$key"]=$(extract_value "$key")
-done
 
 # Check if this is a local installation
 if [[ "${CONFIG_VALUES["Local Installation"]}" == "y" ]]; then

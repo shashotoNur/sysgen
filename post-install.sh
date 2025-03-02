@@ -324,7 +324,7 @@ sudo systemctl enable --now set-brightness.service
 
 # Download IPTV list
 echo "Downloading IPTV playlist..."
-wget -c -P ~/Scratch/iptv_playlist.m3u https://iptv-org.github.io/iptv/index.m3u
+wget -O ~/Scratch/iptv_playlist.m3u https://iptv-org.github.io/iptv/index.m3u
 
 # Setup VS Code extensions
 echo "Installing VS Code extensions..."
@@ -757,6 +757,19 @@ else
     echo "Login to mega.nz failed..."
 fi
 
+# Restore local backup for all user directories
+backup_base="~/Backups/data/home/"
+
+# Find all user directories within the backup base
+find "$backup_base" -maxdepth 1 -type d ! -name "." -print0 | while IFS= read -r -d $'\0' user_dir; do
+  user_name=$(basename "$user_dir")
+
+  echo "Restoring backup from user: $user_name"
+  cp -r "$user_dir"/* ~/
+done
+
+echo "Backup restoration for all users completed!"
+
 # Log system information
 systemd-analyze plot >~/Logs/boot.svg
 sudo systemd-analyze blame >~/Logs/blame.txt
@@ -785,5 +798,5 @@ echo "TODO:
 " > ~/Documents/remaining_setup.md
 
 # Exit the script (let the zshrc complete)
-echo "Exiting the post install script."
+echo -e "Automated install and setup has completed!\n Exiting now..."
 exit 0

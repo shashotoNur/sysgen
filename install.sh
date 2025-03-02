@@ -385,10 +385,6 @@ cp /boot/efi/EFI/GRUB/grubx64.efi /boot/efi/EFI/BOOT/BOOTX64.EFI
 echo "Changing shell to zsh..."
 chsh -s /bin/zsh
 
-# Change user
-echo "Changing user to ${CONFIG_VALUES["Username"]}..."
-su ${CONFIG_VALUES["Username"]}
-
 # Ensure the post install script executes once
 echo "Creating post-install script runner..."
 ZSHRC="/home/${CONFIG_VALUES["Username"]}/.zshrc"
@@ -397,7 +393,7 @@ ZSHRC="/home/${CONFIG_VALUES["Username"]}/.zshrc"
 cat <<EOF >$ZSHRC
 # Launch the post install script
 sudo bash /home/${CONFIG_VALUES["Username"]}/Scratch/sysgen/main.sh post-install
-mv /home/${CONFIG_VALUES["Username"]}/Scratch/sysgen/main.sh /home/${CONFIG_VALUES["Username"]}/Scratch/sysgen/main.sh.done
+sudo mv /home/${CONFIG_VALUES["Username"]}/Scratch/sysgen/main.sh /home/${CONFIG_VALUES["Username"]}/Scratch/sysgen/main.sh.done
 
 # Remove self (to avoid running more than once)
 sudo rm "$ZSHRC"
@@ -409,13 +405,17 @@ EOF
 # Mount the drive
 STORAGE_MOUNT="/mnt/storage"
 mkdir -p $STORAGE_MOUNT
-if ! mount /dev/sdb3 $STORAGE_MOUNT; then
-    echo "Error: Failed to mount sdb3."
+USB_DEVICE=$(lsblk -o NAME,TYPE,RM | grep -E 'disk.*1' | awk '{print "/dev/"$1}')
+if ! mount "$USB_DEVICE"3 $STORAGE_MOUNT; then
+    echo "Error: Failed to mount "$USB_DEVICE"3."
     exit 1
 fi
 
+# Ensure the install configuration is the latest
+cp install.conf "$STORAGE_MOUNT"/backup/sysgen/
+
 # Copy the script directory
-if ! cp -r /backup/sysgen /home/${CONFIG_VALUES["Username"]}/Scratch/; then
+if ! cp -r "$STORAGE_MOUNT"/backup/sysgen /home/${CONFIG_VALUES["Username"]}/Scratch/; then
     echo "Error: Failed to copy the backup directory."
     exit 1
 fi

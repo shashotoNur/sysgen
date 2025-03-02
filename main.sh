@@ -8,6 +8,12 @@ if [[ "$EUID" -ne 0 ]]; then
     exit 1
 fi
 
+# Check if fzf is available
+if ! command -v fzf &>/dev/null; then
+    echo "Error: fzf is not installed. Please install it before proceeding."
+    exit 1
+fi
+
 # Get installation phase from argument or prompt
 if [[ -n "$1" ]]; then
     PHASE="$1"
