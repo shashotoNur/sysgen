@@ -66,7 +66,16 @@ sudo umount "${usb_device}1"
 sudo umount "${usb_device}3"
 
 # Wipe the USB drive
-sudo wipefs --all "${usb_device}"
+echo "Securely wiping the USB drive..."
+sudo dd if=/dev/zero of="${usb_device}" bs=4M status=progress
+
+sudo blkdiscard -v "${usb_device}"
+if [[ $? -eq 0 ]]; then
+  echo "USB drive has been securely wiped."
+  echo "USB drive can be safely removed."
+else
+  echo "Error: There was a problem wiping the USB drive. Please check manually."
+fi
 
 # Enable display manager
 sudo systemctl enable sddm
