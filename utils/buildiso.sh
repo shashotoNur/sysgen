@@ -12,10 +12,10 @@ fi
 
 # Copy user scripts into airootfs
 mkdir -p "$PROFILE_DIR/airootfs/root/sysgen"
-cp -r "$ROOT_DIR/sysgen"/* "$PROFILE_DIR/airootfs/root/sysgen"
+cp -r ./*.sh ./*.conf ./*.lst ./utils/ "$PROFILE_DIR/airootfs/root/sysgen"
 
 # Ensure the script runs on boot
-echo "cd ./sysgen && bash install.sh" >> "$PROFILE_DIR/airootfs/root.zshrc"
+echo "cd ./sysgen && bash install.sh" >>"$PROFILE_DIR/airootfs/root/.bashrc"
 
 # Define the path to loader.conf
 LOADER_CONF="$PROFILE_DIR/efiboot/loader/loader.conf"
@@ -34,7 +34,7 @@ else
 fi
 
 # Include fuzzy finder in the iso
-echo "fzf" >> "$PROFILE_DIR/packages.x86_64"
+echo "fzf" >>"$PROFILE_DIR/packages.x86_64"
 
 # Build the custom ISO
 sudo mkarchiso -v -w work -o out $PROFILE_DIR

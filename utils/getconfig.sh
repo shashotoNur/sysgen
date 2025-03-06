@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -e  # Exit on error
+set -e # Exit on error
 
 OUTPUT_FILE="install.conf"
 
@@ -17,16 +17,19 @@ convert_to_gib() {
     local SIZE_NUM=$1
     local SIZE_UNIT=$2
     case "$SIZE_UNIT" in
-        G) echo $(awk "BEGIN {printf \"%d\", $SIZE_NUM * 1000000000 / 1073741824}") ;;  # Convert GB → GiB
-        T) echo $(awk "BEGIN {printf \"%d\", $SIZE_NUM * 1000000000000 / 1073741824}") ;;  # Convert TB → GiB
-        *) echo "Invalid size format"; exit 1 ;;
+    G) echo $(awk "BEGIN {printf \"%d\", $SIZE_NUM * 1000000000 / 1073741824}") ;;    # Convert GB → GiB
+    T) echo $(awk "BEGIN {printf \"%d\", $SIZE_NUM * 1000000000000 / 1073741824}") ;; # Convert TB → GiB
+    *)
+        echo "Invalid size format"
+        exit 1
+        ;;
     esac
 }
 
 if [[ "$LOCAL_INSTALL" == "y" ]]; then
     # List drives and select one with fzf
     DRIVE=$(lsblk -d -n -o NAME,SIZE | fzf --prompt="Select installation drive: " | awk '{print $1}')
-    RAW_SIZE=$(lsblk -d -n -o SIZE "/dev/$DRIVE" | awk '{print int($1)}')  # Get raw size (e.g., "931G" or "1T")
+    RAW_SIZE=$(lsblk -d -n -o SIZE "/dev/$DRIVE" | awk '{print int($1)}') # Get raw size (e.g., "931G" or "1T")
 
     DRIVE_SIZE=$RAW_SIZE
 else
@@ -34,7 +37,7 @@ else
     SIZE_UNIT=${DRIVE_SIZE: -1}
     SIZE_NUM=${DRIVE_SIZE::-1}
 
-    DRIVE_SIZE=$(convert_to_gib "$SIZE_NUM" "$SIZE_UNIT")  # Convert to GiB
+    DRIVE_SIZE=$(convert_to_gib "$SIZE_NUM" "$SIZE_UNIT") # Convert to GiB
 fi
 
 # Convert to integer (ensuring no decimal places)
@@ -51,8 +54,8 @@ get_partition_size() {
         read -p "Enter $PART_NAME partition size in GiB (${AVAILABLE_SPACE} GiB left): " PART_SIZE
 
         if [[ "$PART_SIZE" =~ ^[0-9]+$ ]] && [[ "$PART_SIZE" -le "$AVAILABLE_SPACE" ]]; then
-            AVAILABLE_SPACE=$((AVAILABLE_SPACE - PART_SIZE))  # Update global variable
-            eval "${PART_NAME}_SIZE=$PART_SIZE"  # Assign dynamically
+            AVAILABLE_SPACE=$((AVAILABLE_SPACE - PART_SIZE)) # Update global variable
+            eval "${PART_NAME}_SIZE=$PART_SIZE"              # Assign dynamically
             break
         else
             echo "Invalid size or exceeds available space. Try again."
@@ -135,6 +138,6 @@ echo
     echo "Mega Key: $MEGA_KEY"
     echo "Music Playlist Link: $MUSIC_PLAYLIST_LINK"
     echo "Github Token: $GITHUB_TOKEN"
-} > "$OUTPUT_FILE"
+} >"$OUTPUT_FILE"
 
 echo "Installation configuration saved to $OUTPUT_FILE"

@@ -1,426 +1,509 @@
 #!/bin/bash
 
-set -e # Exit on error
+###############################################################################
+# Script Name: install.sh
+# Description: Automates the installation of a custom Arch Linux system to a
+#              specified drive, including partitioning, encryption, base system
+#              installation, and setup postinstallation script.
+# Author: Shashoto Nur
+# Date: [Current Date]
+# Version: 1.1
+# License: MIT
+###############################################################################
 
-# Check if system is booted in UEFI mode
-if [[ ! -d /sys/firmware/efi ]]; then
-    echo "Error: System is not booted in UEFI mode!"
-    exit 1
-fi
+# --- Configuration ---
+set -euo pipefail # Exit on error, unset variable, or pipeline failure
 
+# --- Global Variables ---
 CONFIG_FILE="install.conf"
+SCRIPT_DIR="$(dirname "$0")" # Get the directory of the script
 
-# If config file doesn't exist, run the script to generate it
-[[ ! -f "$CONFIG_FILE" ]] && bash utils/getconfig.sh
+# --- Logging Functions ---
+log_info() { printf "\033[1;34m[INFO]\033[0m %s\n" "$1" >&2; }
+log_warning() { printf "\033[1;33m[WARNING]\033[0m %s\n" "$1" >&2; }
+log_error() { printf "\033[1;31m[ERROR]\033[0m %s\n" "$1" >&2; }
+log_success() { printf "\033[1;32m[SUCCESS]\033[0m %s\n" "$1" >&2; }
+log_debug() { printf "\e[90mDEBUG:\e[0m %s\n" "$1" >&2; }
 
-# Function to extract values
-extract_value() {
-    grep -E "^$1:" "$CONFIG_FILE" | awk -F': ' '{print $2}'
+# --- Utility Functions ---
+
+# Read configuration from install.conf
+read_config() {
+    local key
+    declare -A config_values
+
+    # Check if config file exists
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        log_error "Config file '$CONFIG_FILE' not found. Run utils/getconfig.sh"
+        return 1
+    fi
+
+    while IFS='=' read -r key value; do
+        config_values["$key"]="$value"
+    done < <(sed '/^#/d;s/^[[:blank:]]*//;s/[[:blank:]]*$//' "$CONFIG_FILE") #remove comments and trim whitespace
+
+    return 0
 }
 
-# Read configuration values
-declare -A CONFIG_VALUES
-for key in "Username" "Hostname" "Drive" \
-    "Boot Partition" "Root Partition" "Swap Partition" "Home Partition" "Network Type" \
-    "Password" "LUKS Password" "Root Password" "WiFi SSID" "WiFi Password"; do
-    CONFIG_VALUES["$key"]=$(extract_value "$key")
-done
+# Function to handle device selection using fzf
+select_drive() {
+    local drive_selection
 
-# Handle LUKS and Root passwords
-PASSWORD=${CONFIG_VALUES["Password"]}
-if [[ -n "$PASSWORD" ]]; then
-    CONFIG_VALUES["LUKS Password"]=$PASSWORD
-    CONFIG_VALUES["Root Password"]=$PASSWORD
-fi
+    log_info "No drive specified. Selecting a drive using fzf..."
+    drive_selection=$(lsblk -dpno NAME,SIZE | grep -E "/dev/sd|/dev/nvme|/dev/mmcblk" | fzf --prompt="Select a drive: " --height=10 --border --reverse | awk '{print $1}')
 
-# Check if DRIVE is only "/dev/"
-if [[ "${CONFIG_VALUES["Drive"]}" == "/dev/" || -z "${CONFIG_VALUES["Drive"]}" ]]; then
-    echo "No drive specified. Please select a drive:"
-
-    # List available drives (excluding partitions)
-    DRIVE_SELECTION=$(lsblk -dpno NAME,SIZE | grep -E "/dev/sd|/dev/nvme|/dev/mmcblk" | fzf --prompt="Select a drive: " --height=10 --border --reverse | awk '{print $1}')
-
-    if [[ -n "$DRIVE_SELECTION" ]]; then
-        CONFIG_VALUES["Drive"]="$DRIVE_SELECTION"
-        echo "Selected drive: ${CONFIG_VALUES["DRIVE"]}"
-    else
-        echo "No drive selected. Exiting."
-        exit 1
+    if [[ -z "$drive_selection" ]]; then
+        log_error "No drive selected. Exiting."
+        return 1
     fi
-fi
 
-# Connect to the wifi
-if [[ "${CONFIG_VALUES["Network Type"]}" == "wifi" ]]; then
-    echo "WiFi SSID: ${CONFIG_VALUES["WiFi SSID"]}"
-    iwctl --passphrase "${CONFIG_VALUES["WiFi Password"]}" station wlan0 connect "${CONFIG_VALUES["WiFi SSID"]}"
-fi
+    log_success "Selected drive: $drive_selection"
+    echo "$drive_selection"
+}
 
-# Check if there is internet
-if ping -c 1 8.8.8.8 &>/dev/null; then
-    echo "Internet connection is available."
-else
-    echo "Error: No internet connection."
-    exit 1
-fi
-
-# Wipe the selected drive
-echo "Wiping ${CONFIG_VALUES["Drive"]}..."
-wipefs --all --force "${CONFIG_VALUES["Drive"]}"
-
-# Function to convert MiB or GiB to bytes
+# Function to convert size units to bytes
 unit_to_bytes() {
-    local u="$1"
-    local val=$(echo "$u" | sed 's/[A-Za-z]*$//')
-    local ut=$(echo "$u" | sed 's/^[0-9]*//' | tr '[:upper:]' '[:lower:]')
+    local size="$1"
+    local unit="${size##*[0-9]}"
+    local value="${size%[a-zA-Z]*}"
 
-    case "$ut" in
-    mib) echo $((val * 1024 * 1024)) ;;
-    gib) echo $((val * 1024 * 1024 * 1024)) ;;
+    case "${unit,,}" in
+    mib) echo $((value * 1024 * 1024)) ;;
+    gib) echo $((value * 1024 * 1024 * 1024)) ;;
     *)
-        echo "Error: Invalid unit (MiB or GiB): $u"
-        exit 1
+        log_error "Invalid unit '$unit' in '$size'. Use MiB or GiB."
+        return 1
         ;;
     esac
 }
 
-# Function to convert bytes to MiB for parted.
-bytes_to_mib() {
-    local b="$1"
-    echo "$(($b / (1024 * 1024)))MiB"
-}
+# --- System Checks ---
 
-# Partition the disk
-echo "Creating partitions..."
-parted -s "${CONFIG_VALUES["Drive"]}" mklabel gpt
-start_size=$(unit_to_bytes "1MiB") # Start at 1MiB in bytes
-
-# Boot Partition
-boot_size=$(unit_to_bytes "${CONFIG_VALUES["Boot Partition"]}")
-end_size=$((start_size + boot_size))
-parted -s "${CONFIG_VALUES["Drive"]}" mkpart primary fat32 "$(bytes_to_mib "$start_size")" "$(bytes_to_mib "$end_size")"
-parted -s "${CONFIG_VALUES["Drive"]}" set 1 esp on
-start_size="$end_size"
-
-# Root Partition
-root_size=$(unit_to_bytes "${CONFIG_VALUES["Root Partition"]}")
-end_size=$((start_size + root_size))
-parted -s "${CONFIG_VALUES["Drive"]}" mkpart primary "$(bytes_to_mib "$start_size")" "$(bytes_to_mib "$end_size")"
-start_size="$end_size"
-
-# Swap partition
-if [[ "${CONFIG_VALUES["Swap Partition"]}" != "0" ]]; then
-    swap_size=$(unit_to_bytes "${CONFIG_VALUES["Swap Partition"]}")
-    end_size=$((start_size + swap_size))
-    parted -s "${CONFIG_VALUES["Drive"]}" mkpart primary linux-swap "$(bytes_to_mib "$start_size")" "$(bytes_to_mib "$end_size")"
-    start_size="$end_size"
-fi
-
-# Home partition
-home_size=$(unit_to_bytes "${CONFIG_VALUES["Home Partition"]}")
-end_size=$((start_size + home_size))
-parted -s "${CONFIG_VALUES["Drive"]}" mkpart primary "$(bytes_to_mib "$start_size")" "$(bytes_to_mib "$end_size")"
-
-echo "Partitions created!"
-
-# Get partition names
-BOOT_PART="${CONFIG_VALUES["Drive"]}1"
-ROOT_PART="${CONFIG_VALUES["Drive"]}2"
-if [[ "${CONFIG_VALUES["Swap Partition"]}" != "0" ]]; then
-    SWAP_PART="${CONFIG_VALUES["Drive"]}3"
-    HOME_PART="${CONFIG_VALUES["Drive"]}4"
-else
-    HOME_PART="${CONFIG_VALUES["Drive"]}3"
-fi
-
-# Encrypt root and home partitions
-echo "Encrypting root partition..."
-echo -n "${CONFIG_VALUES["LUKS Password"]}" | cryptsetup luksFormat "$ROOT_PART"
-echo -n "${CONFIG_VALUES["LUKS Password"]}" | cryptsetup open "$ROOT_PART" cryptroot
-
-echo "Encrypting home partition..."
-echo -n "${CONFIG_VALUES["LUKS Password"]}" | cryptsetup luksFormat "$HOME_PART"
-echo -n "${CONFIG_VALUES["LUKS Password"]}" | cryptsetup open "$HOME_PART" crypthome
-
-# Format partitions
-echo "Formatting partitions..."
-mkfs.fat -F32 "$BOOT_PART" -n BOOT
-mkfs.btrfs -f /dev/mapper/cryptroot -L ROOT
-mkfs.btrfs -f /dev/mapper/crypthome -L HOME
-if [[ "${CONFIG_VALUES["Swap Partition"]}" != "0" ]]; then
-    mkswap "$SWAP_PART" -L SWAP
-    swapon "$SWAP_PART"
-fi
-
-# Create Btrfs subvolumes
-echo "Creating Btrfs subvolumes..."
-mount --mkdir /dev/mapper/cryptroot /mnt
-mount --mkdir /dev/mapper/crypthome /mnt/home
-btrfs subvolume create /mnt/@
-btrfs subvolume create /mnt/home/@home
-umount /mnt/home && umount /mnt
-
-# Mount subvolumes
-echo "Mounting subvolumes..."
-mount -o compress=zstd,subvol=@ /dev/mapper/cryptroot /mnt
-mkdir -p /mnt/home
-mount -o compress=zstd,subvol=@home /dev/mapper/crypthome /mnt/home
-
-# Mount boot partition
-echo "Mounting boot partition..."
-mkdir -p /mnt/boot/efi
-mount "$BOOT_PART" /mnt/boot/efi
-
-# Verify partitions, filesystems, and mounts
-verify_partitions() {
-    local errors=0
-
-    # Check boot partition
-    if ! blkid "${BOOT_PART}" | grep -q "TYPE=\"vfat\""; then
-        echo "Error: Boot partition is not formatted as FAT32"
-        errors=$((errors + 1))
-    fi
-
-    # Check root partition
-    if ! cryptsetup status cryptroot | grep -q "type:      LUKS2"; then
-        echo "Error: Root partition is not encrypted with LUKS2"
-        errors=$((errors + 1))
-    fi
-
-    if ! blkid /dev/mapper/cryptroot | grep -q "TYPE=\"btrfs\""; then
-        echo "Error: Root partition is not formatted as Btrfs"
-        errors=$((errors + 1))
-    fi
-
-    # Check home partition
-    if ! cryptsetup status crypthome | grep -q "type:      LUKS2"; then
-        echo "Error: Home partition is not encrypted with LUKS2"
-        errors=$((errors + 1))
-    fi
-
-    if ! blkid /dev/mapper/crypthome | grep -q "TYPE=\"btrfs\""; then
-        echo "Error: Home partition is not formatted as Btrfs"
-        errors=$((errors + 1))
-    fi
-
-    # Check swap partition if it exists
-    if [[ "${CONFIG_VALUES["Swap Partition"]}" != "0" ]]; then
-        if ! blkid "${SWAP_PART}" | grep -q "TYPE=\"swap\""; then
-            echo "Error: Swap partition is not formatted as swap"
-            errors=$((errors + 1))
-        fi
-    fi
-
-    # Check mounts
-    if ! findmnt /mnt | grep -q "/dev/mapper/cryptroot"; then
-        echo "Error: Root partition is not mounted at /mnt"
-        errors=$((errors + 1))
-    fi
-
-    if ! findmnt /mnt/home | grep -q "/dev/mapper/crypthome"; then
-        echo "Error: Home partition is not mounted at /mnt/home"
-        errors=$((errors + 1))
-    fi
-
-    if ! findmnt /mnt/boot/efi | grep -q "${BOOT_PART}"; then
-        echo "Error: Boot partition is not mounted at /mnt/boot/efi"
-        errors=$((errors + 1))
-    fi
-
-    # Check Btrfs subvolumes
-    if ! btrfs subvolume list /mnt | grep -q "@"; then
-        echo "Error: Root Btrfs subvolume '@' not found"
-        errors=$((errors + 1))
-    fi
-
-    if ! btrfs subvolume list /mnt | grep -q "@home"; then
-        echo "Error: Home Btrfs subvolume '@home' not found"
-        errors=$((errors + 1))
-    fi
-
-    if [ $errors -eq 0 ]; then
-        echo "All partitions, filesystems, and mounts verified successfully."
-        return 0
-    else
-        echo "Verification failed with $errors errors."
+check_uefi() {
+    if [[ ! -d /sys/firmware/efi ]]; then
+        log_error "System is not booted in UEFI mode!"
         return 1
     fi
+    log_success "System booted in UEFI mode."
 }
 
-# Run the verification
-if verify_partitions; then
-    echo "Partition verification passed. Continuing with installation..."
-else
-    echo "Partition verification failed. Please check the errors and fix before continuing."
-    exit 1
-fi
+check_internet() {
+    if ! ping -c 1 8.8.8.8 &>/dev/null; then
+        log_error "No internet connection."
+        return 1
+    fi
+    log_success "Internet connection is available."
+}
 
-# Update the mirrors
-reflector --verbose --country India,China,Japan,Singapore,US --protocol https --sort rate --latest 20 --download-timeout 45 --threads 5 --save /etc/pacman.d/mirrorlist
+# --- Partitioning and Formatting ---
 
-# Install base system
-echo "Installing base system..."
-pacstrap /mnt base base-devel linux linux-headers linux-lts linux-lts-headers linux-zen linux-zen-headers linux-firmware nano vim networkmanager iw wpa_supplicant dialog
+partition_disk() {
+    local drive="$1"
+    local config_values="$2"
 
-# Generate fstab
-genfstab -U /mnt >>/mnt/etc/fstab
-cat /mnt/etc/fstab
+    # Check if drive is specified and exists.
+    if [[ -z "$drive" || ! -b "$drive" ]]; then
+        log_error "Invalid or missing drive specified: $drive"
+        return 1
+    fi
 
-# Chroot into the new system
-echo "Changing root..."
-arch-chroot /mnt /bin/bash
+    # Create GPT partition table
+    log_info "Creating GPT partition table on $drive..."
+    parted -s "$drive" mklabel gpt || log_error "Failed to create GPT partition table" && return 1
 
-# Create a key file for the home partition
-echo "Creating key file for home partition..."
-dd if=/dev/urandom of=/mnt/root/home.key bs=512 count=4
-chmod 600 /mnt/root/home.key
+    local partition_num=1
+    local start_sector=1
 
-# Add the key file to the LUKS home partition
-echo "Adding key file to home partition..."
-echo -n "${CONFIG_VALUES["LUKS Password"]}" | cryptsetup luksAddKey "$HOME_PART" /mnt/root/home.key
+    # Function to create a single partition
+    create_partition() {
+        local drive="$1"
+        local part_num="$2"
+        local fs_type="$3"
+        local size_bytes="$4"
+        local flags="$5"
 
-# Ensure the home partition is unlocked by initramfs using the key file
-echo "Configuring home partition to be unlocked by initramfs using the key file..."
-echo "crypthome  UUID=$(blkid -s UUID -o value $HOME_PART)  /root/home.key  luks" >>/mnt/etc/crypttab
+        local start_sector=$((start_sector))
+        local end_sector=$((start_sector + size_bytes - 1))
 
-# Ensure the key file is included in the initramfs
-echo "Adding key file to initramfs..."
-sed -i '/^FILES=/ s/)/ \/root\/home.key)/' /mnt/etc/mkinitcpio.conf
+        log_info "Creating partition $part_num ($fs_type) on $drive ($start_sector - $end_sector)"
 
-# Update mkinitcpio HOOKS to replace 'filesystems' with 'encrypt btrfs'
-echo "Updating mkinitcpio hooks..."
-sed -i '/^HOOKS=/ s/\bfilesystems\b/encrypt btrfs/' /etc/mkinitcpio.conf
-mkinitcpio -P
+        parted -s "$drive" mkpart primary "$fs_type" "$start_sector" "$end_sector" || {
+            log_error "Failed to create partition $part_num"
+            return 1
+        }
+        if [[ -n "$flags" ]]; then
+            log_debug "Setting flags: $flags"
+            parted -s "$drive" set "$part_num" "$flags" on || {
+                log_error "Failed to set flags on partition $part_num"
+                return 1
+            }
+        fi
+        start_sector=$((start_sector + size_bytes))
 
-# Ensure autoboot via passkey for root decryption
-echo "Configuring autoboot via passkey for root decryption..."
+        log_success "Partition $part_num created successfully."
+    }
 
-USB_DEVICE="$(lsblk -o NAME,TYPE,RM | grep -E 'disk.*1' | awk '{print "/dev/"$1}')3"
-USB_MOUNT="/mnt/usbkey"
-KEY_FILE="luks-root.key"
-KEYFILE_PATH="$USB_MOUNT/$KEY_FILE"
+    #Partitions sizes from config
+    local boot_size_bytes=$(unit_to_bytes "${config_values["Boot Partition"]}")
+    local root_size_bytes=$(unit_to_bytes "${config_values["Root Partition"]}")
+    local swap_size_bytes=$(unit_to_bytes "${config_values["Swap Partition"]}")
+    local home_size_bytes=$(unit_to_bytes "${config_values["Home Partition"]}")
 
-LUKS_DEVICE="${CONFIG_VALUES["Drive"]}2" # LUKS-encrypted partition
-LUKS_NAME="cryptroot"                    # Name for the decrypted LUKS mapping
+    # Create Partitions
+    create_partition "$drive" "$partition_num" fat32 "$boot_size_bytes" esp || return 1
+    partition_num=$((partition_num + 1))
+    create_partition "$drive" "$partition_num" btrfs "$root_size_bytes" || return 1
+    partition_num=$((partition_num + 1))
 
-# Create a mount point for the USB if it doesn't exist
-mkdir -p "$USB_MOUNT"
+    if ((swap_size_bytes > 0)); then
+        create_partition "$drive" "$partition_num" linux-swap "$swap_size_bytes" || return 1
+        partition_num=$((partition_num + 1))
+    fi
+    create_partition "$drive" "$partition_num" btrfs "$home_size_bytes" || return 1
 
-# Mount the USB drive
-echo "Mounting USB drive..."
-mount "$USB_DEVICE" "$USB_MOUNT"
+    log_success "Partitions created successfully."
+}
 
-# Generate a secure keyfile
-echo "Creating keyfile..."
-dd if=/dev/urandom of="$KEYFILE_PATH" bs=512 count=4
-chmod 600 "$KEYFILE_PATH"
+format_partitions() {
+    local drive="${CONFIG_VALUES["Drive"]}"
+    local boot_part="$drive"1
+    local root_part="$drive"2
+    local swap_part="$drive"3
+    local home_part="$drive"4
 
-# Add keyfile to LUKS
-echo "Adding keyfile to LUKS..."
-echo -n "${CONFIG_VALUES["LUKS Password"]}" | cryptsetup luksAddKey "$LUKS_DEVICE" "$KEYFILE_PATH"
+    #Format Partitions
+    log_info "Formatting partitions..."
+    mkfs.fat -F32 "$boot_part" -n BOOT || log_error "Failed to format boot partition" && return 1
+    mkfs.btrfs -f "$root_part" -L ROOT || log_error "Failed to format root partition" && return 1
+    mkfs.btrfs -f "$home_part" -L HOME || log_error "Failed to format home partition" && return 1
 
-# Get UUIDs for fstab and GRUB config
-LUKS_UUID=$(blkid -s UUID -o value "$LUKS_DEVICE")
-USB_UUID=$(blkid -s UUID -o value "$USB_DEVICE")
+    if [[ "${CONFIG_VALUES["Swap Partition"]}" != "0" ]]; then
+        mkswap "$swap_part" -L SWAP || log_error "Failed to format swap partition" && return 1
+        swapon "$swap_part" || log_error "Failed to activate swap partition" && return 1
+    fi
 
-# Unmount the USB drive
-echo "Unmounting USB drive..."
-umount "$USB_MOUNT"
+    log_success "Partitions formatted successfully."
+}
 
-# Set root password
-echo "Setting root password..."
-echo "root:${CONFIG_VALUES["Root Password"]}" | chpasswd
+# --- Encryption Functions ---
 
-# Create user
-echo "Creating user ${CONFIG_VALUES["Username"]}..."
-useradd -m -G wheel -s /bin/bash "${CONFIG_VALUES["Username"]}"
+encrypt_partition() {
+    local partition="$1"
+    local password="$2"
+    local mapper_name="$3"
 
-# Ensure user has sudo privileges
-echo "Configuring sudo privileges..."
-sed -i 's/^# %wheel ALL=(ALL:ALL) NOPASSWD ALL/%wheel ALL=(ALL:ALL) NOPASSWD ALL/' /etc/sudoers
+    log_info "Encrypting partition $partition with LUKS..."
+    echo -n "$password" | cryptsetup luksFormat "$partition" || {
+        log_error "Failed to encrypt partition $partition"
+        return 1
+    }
+    echo -n "$password" | cryptsetup open "$partition" "$mapper_name" || {
+        log_error "Failed to open encrypted partition $partition"
+        return 1
+    }
+    log_success "Partition $partition encrypted successfully."
+}
 
-# Set hostname
-echo "Setting hostname..."
-echo "${CONFIG_VALUES["Hostname"]}" >/etc/hostname
+# ---  Btrfs Subvolume Creation ---
 
-# Configure /etc/hosts
-echo "Configuring /etc/hosts..."
-cat <<EOF >/etc/hosts
+create_btrfs_subvolumes() {
+    local root_mount="/mnt"
+    local home_mount="$root_mount/home"
+
+    log_info "Creating Btrfs subvolumes..."
+    mkdir -p "$root_mount" "$home_mount" || {
+        log_error "Failed to create mount points"
+        return 1
+    }
+
+    mount "/dev/mapper/cryptroot" "$root_mount" || {
+        log_error "Failed to mount root partition"
+        return 1
+    }
+    mount "/dev/mapper/crypthome" "$home_mount" || {
+        log_error "Failed to mount home partition"
+        return 1
+    }
+
+    btrfs subvolume create "$root_mount/@"
+    btrfs subvolume create "$home_mount/@home" || {
+        log_error "Failed to create Btrfs subvolumes"
+        return 1
+    }
+
+    umount "$home_mount" && umount "$root_mount" || {
+        log_error "Failed to unmount partitions"
+        return 1
+    }
+
+    log_success "Btrfs subvolumes created successfully."
+}
+
+# --- Mount Functions ---
+
+mount_partitions() {
+    local root_mount="/mnt"
+    local home_mount="$root_mount/home"
+    local boot_mount="$root_mount/boot/efi"
+
+    log_info "Mounting partitions..."
+    mkdir -p "$home_mount" "$boot_mount" || {
+        log_error "Failed to create mount points"
+        return 1
+    }
+
+    mount -o compress=zstd,subvol=@ "/dev/mapper/cryptroot" "$root_mount" || {
+        log_error "Failed to mount root partition"
+        return 1
+    }
+    mount -o compress=zstd,subvol=@home "/dev/mapper/crypthome" "$home_mount" || {
+        log_error "Failed to mount home partition"
+        return 1
+    }
+    mount "${CONFIG_VALUES["Drive"]}1" "$boot_mount" || {
+        log_error "Failed to mount boot partition"
+        return 1
+    }
+
+    log_success "Partitions mounted successfully."
+}
+
+# --- Base System Installation ---
+
+install_base_system() {
+    log_info "Installing base system..."
+    pacstrap "/mnt" base base-devel linux linux-headers linux-lts linux-lts-headers linux-firmware nano vim networkmanager iw wpa_supplicant dialog zsh || {
+        log_error "Failed to install base system"
+        return 1
+    }
+    log_success "Base system installed successfully."
+}
+
+generate_fstab() {
+    log_info "Generating fstab..."
+    genfstab -U /mnt >>/mnt/etc/fstab || {
+        log_error "Failed to generate fstab"
+        return 1
+    }
+    log_success "fstab generated successfully."
+}
+
+# --- User and System Configuration ---
+
+configure_system() {
+    local root_password="${CONFIG_VALUES["Root Password"]}"
+    local username="${CONFIG_VALUES["Username"]}"
+    local hostname="${CONFIG_VALUES["Hostname"]}"
+
+    # Chroot and configure the system
+    log_info "Entering chroot environment..."
+    arch-chroot /mnt bash -c "
+        # Set root password
+        echo 'root:$root_password' | chpasswd;
+        # Create user
+        useradd -m -G wheel -s /bin/zsh '$username';
+        # Add user to sudoers
+        sed -i 's/^# %wheel ALL=(ALL:ALL) NOPASSWD ALL/%wheel ALL=(ALL:ALL) NOPASSWD ALL/' /etc/sudoers;
+        # Set hostname
+        echo '$hostname' > /etc/hostname;
+        # Configure /etc/hosts
+        cat <<EOF > /etc/hosts
 127.0.0.1 localhost
 ::1       localhost
-127.0.1.1 ${CONFIG_VALUES["Hostname"]}
+127.0.1.1 $hostname
 EOF
+        # Configure locale (example)
+        echo 'LANG=en_US.UTF-8' > /etc/locale.conf;
+        echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen;
+        locale-gen;
+        # Set timezone and sync hardware clock
+        ln -sf /usr/share/zoneinfo/Asia/Dhaka /etc/localtime;
+        hwclock --systohc;
+        # Install grub
+        grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB;
 
-# Configure locale
-echo "Configuring locale..."
-echo "LANG=en_AU.UTF-8" >/etc/locale.conf
-echo "LC_ALL=en_AU.UTF-8" >>/etc/locale.conf
-echo "en_AU.UTF-8 UTF-8" >>/etc/locale.gen
-locale-gen
+    " || {
+        log_error "Failed to configure system within chroot"
+        return 1
+    }
+    log_success "System configured successfully."
 
-# Set timezone and sync hardware clock
-echo "Setting timezone and syncing hardware clock..."
-ln -sf /usr/share/zoneinfo/Asia/Dhaka /etc/localtime
-hwclock --systohc
+}
 
-# Update and install necessary packages
-echo "Installing essential packages..."
-pacman -Sy --noconfirm grub efibootmgr dosfstools os-prober mtools fuse3 zsh
+# ---  Keyfile Management ---
 
-# Mount EFI partition and install GRUB
-echo "Installing GRUB bootloader..."
-grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
+manage_keyfiles() {
+    local usb_device=$(lsblk -o NAME,TYPE,RM | grep -E 'disk.*1' | awk '{print "/dev/"$1}')
+    local usb_mount="/mnt/usbkey"
+    local key_file="luks-root.key"
+    local keyfile_path="$usb_mount/$key_file"
+    local luks_device="${CONFIG_VALUES["Drive"]}2"
+    local luks_password="${CONFIG_VALUES["LUKS Password"]}"
 
-# Ensure GRUB includes cryptdevice and cryptkey
-echo "Updating GRUB configuration..."
-GRUB_CFG="/etc/default/grub"
-sed -i "s|GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"cryptdevice=UUID=$LUKS_UUID:$LUKS_NAME cryptkey=UUID=$USB_UUID:btrfs:/$KEY_FILE root=\/dev\/mapper\/cryptroot\"|" "$GRUB_CFG"
+    mkdir -p "$usb_mount"
 
-grub-mkconfig -o /boot/grub/grub.cfg
+    mount "$usb_device"3 "$usb_mount" || {
+        log_error "Failed to mount USB drive"
+        return 1
+    }
 
-# Backup the EFI file as a failsafe
-mkdir -p /boot/efi/EFI/BOOT
-cp /boot/efi/EFI/GRUB/grubx64.efi /boot/efi/EFI/BOOT/BOOTX64.EFI
+    #Generate a secure keyfile on USB.
+    log_info "Creating keyfile on USB..."
+    dd if=/dev/urandom of="$keyfile_path" bs=512 count=4
+    chmod 600 "$keyfile_path" || {
+        log_error "Failed to create keyfile"
+        return 1
+    }
 
-# Change shell to zsh
-echo "Changing shell to zsh..."
-chsh -s /bin/zsh
+    # Add keyfile to root LUKS partition
+    log_info "Adding keyfile to LUKS..."
+    echo -n "$luks_password" | cryptsetup luksAddKey "$luks_device" "$keyfile_path" || {
+        log_error "Failed to add keyfile to LUKS"
+        return 1
+    }
 
-# Ensure the post install script executes once
-echo "Creating post-install script runner..."
-ZSHRC="/home/${CONFIG_VALUES["Username"]}/.zshrc"
+    umount "$usb_mount" || {
+        log_error "Failed to unmount USB drive"
+        return 1
+    }
+    log_success "Keyfile management completed successfully."
+}
 
-# Create the target script
-cat <<EOF >$ZSHRC
-# Launch the post install script
-sudo bash /home/${CONFIG_VALUES["Username"]}/Scratch/sysgen/main.sh post-install
-sudo mv /home/${CONFIG_VALUES["Username"]}/Scratch/sysgen/main.sh /home/${CONFIG_VALUES["Username"]}/Scratch/sysgen/main.sh.done
+# --- Mirror Configuration ---
 
-# Remove self (to avoid running more than once)
-sudo rm "$ZSHRC"
+update_mirrors() {
+    log_info "Updating mirrorlist..."
+    reflector --verbose --country India,China,Japan,Singapore,US --protocol https --sort rate --latest 20 --download-timeout 45 --threads 5 --save /etc/pacman.d/mirrorlist || {
+        log_error "Failed to update mirrorlist"
+        return 1
+    }
+    log_success "Mirrorlist updated successfully."
+}
 
-echo "Bye bye!"
-poweroff
-EOF
+# --- Install GRUB ---
 
-# Mount the drive
-STORAGE_MOUNT="/mnt/storage"
-mkdir -p $STORAGE_MOUNT
-USB_DEVICE=$(lsblk -o NAME,TYPE,RM | grep -E 'disk.*1' | awk '{print "/dev/"$1}')
-if ! mount "$USB_DEVICE"3 $STORAGE_MOUNT; then
-    echo "Error: Failed to mount "$USB_DEVICE"3."
-    exit 1
-fi
+install_grub() {
+    local luks_uuid=$(blkid -s UUID -o value "${CONFIG_VALUES["Drive"]}2")
+    local usb_uuid=$(blkid -s UUID -o value $(lsblk -o NAME,TYPE,RM | grep -E 'disk.*1' | awk '{print "/dev/"$1}')3)
+    local key_file="luks-root.key"
 
-# Ensure the install configuration is the latest
-cp install.conf "$STORAGE_MOUNT"/backup/sysgen/
+    log_info "Installing GRUB bootloader..."
+    arch-chroot /mnt bash -c "
+        grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB;
+        # Update GRUB config
+        sed -i \"s|GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"cryptdevice=UUID=$luks_uuid:cryptroot cryptkey=UUID=$usb_uuid:btrfs:/mnt/$key_file root=\/dev\/mapper\/cryptroot\"|g\" /etc/default/grub;
+        grub-mkconfig -o /boot/grub/grub.cfg;
+        cp /boot/efi/EFI/GRUB/grubx64.efi /boot/efi/EFI/BOOT/BOOTX64.EFI;
+    " || {
+        log_error "Failed to install GRUB"
+        return 1
+    }
+    log_success "GRUB installed successfully."
+}
 
-# Copy the script directory
-if ! cp -r "$STORAGE_MOUNT"/backup/sysgen /home/${CONFIG_VALUES["Username"]}/Scratch/; then
-    echo "Error: Failed to copy the backup directory."
-    exit 1
-fi
+# --- postinstallation Script Execution ---
 
-echo "Installation completed successfully."
-exit
-umount -R /mnt
-reboot
+execute_post_install() {
+    local username="$username"
+    log_info "Creating a postinstall script runner..."
+    BASHRC="/mnt/home/$username/.bashrc"
+
+    # Create the target script
+    echo -e "# Launch the post install script\nsudo bash /home/$username/Scratch/sysgen/main.sh postinstall\nsudo mv /home/$username/Scratch/sysgen/main.sh /home/$username/Scratch/sysgen/main.sh.done\n\n# Remove self (to avoid running more than once)\nsudo rm \"$BASHRC\"\n\necho \"Bye bye!\"\npoweroff" >"$BASHRC" || {
+        log_error "Failed to create post-install runner in $BASHRC"
+        return 1
+    }
+
+    log_warning "postinstall script is configured to run on shell initialization."
+}
+
+# --- Backup Configuration ---
+
+backup_config() {
+    local storage_mount="/mnt/storage"
+    local usb_device=$(lsblk -o NAME,TYPE,RM | grep -E 'disk.*1' | awk '{print "/dev/"$1}')
+    mkdir -p "$storage_mount"
+
+    mount "$usb_device"3 "$storage_mount" || {
+        log_error "Failed to mount storage partition"
+        return 1
+    }
+
+    cp "$CONFIG_FILE" "$storage_mount/backup/sysgen/" || {
+        log_error "Failed to backup config file"
+        return 1
+    }
+
+    umount "$storage_mount" || {
+        log_error "Failed to unmount storage partition"
+        return 1
+    }
+
+    log_success "Config file backed up successfully."
+}
+
+################################################################################################
+# Main Installation Function
+################################################################################################
+
+install() {
+    set -e # Exit on error
+
+    # Check UEFI mode and internet connectivity
+    check_uefi || return 1
+    read_config || return 1
+    check_internet || return 1
+    # Select drive if not specified in config
+    if [[ "${CONFIG_VALUES["Drive"]}" == "/dev/" || -z "${CONFIG_VALUES["Drive"]}" ]]; then
+        CONFIG_VALUES["Drive"]=$(select_drive) || return 1
+    fi
+
+    # Wipe the selected drive
+    log_info "Wiping ${CONFIG_VALUES["Drive"]}..."
+    wipefs --all --force "${CONFIG_VALUES["Drive"]}" || log_error "Failed to wipe drive" && return 1
+    log_success "Drive wiped successfully."
+
+    # Partition and format the disk
+    partition_disk "${CONFIG_VALUES["Drive"]}" "${CONFIG_VALUES[@]}" || return 1
+    format_partitions || return 1
+
+    # Encrypt partitions
+    encrypt_partition "${CONFIG_VALUES["Drive"]}2" "${CONFIG_VALUES["LUKS Password"]}" "cryptroot" || return 1
+    encrypt_partition "${CONFIG_VALUES["Drive"]}4" "${CONFIG_VALUES["LUKS Password"]}" "crypthome" || return 1
+
+    # Create Btrfs subvolumes
+    create_btrfs_subvolumes || return 1
+
+    # Mount partitions
+    mount_partitions || return 1
+
+    # Install base system and generate fstab.
+    install_base_system || return 1
+    generate_fstab || return 1
+
+    # Manage Keyfiles on USB
+    manage_keyfiles || return 1
+
+    # Update mirrors before chroot.
+    update_mirrors || return 1
+
+    #Configure the system inside the chroot
+    configure_system || return 1
+
+    # Install GRUB after system configuration within chroot.
+    install_grub || return 1
+
+    # Execute postinstallation tasks.
+    execute_post_install
+
+    # Backup config after all operations are completed.
+    backup_config || return 1
+
+    log_success "Installation completed successfully."
+    reboot
+}
+
+################################################################################################
+# --- Main Script Execution ---
+
+install
