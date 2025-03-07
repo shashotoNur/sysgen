@@ -63,7 +63,7 @@ execute_phase() {
     local user="$2"
 
     log_info "Executing phase: $phase"
-    local script_path="./${phase}.sh"
+    local script_path="./bin/${phase}.sh"
     if [[ ! -f "$script_path" ]]; then
         log_error "Script for phase '$phase' not found at '$script_path'."
         exit 1
