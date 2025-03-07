@@ -1,4 +1,4 @@
-# Ignore the key, configuration files and lists
+# Ignore the key files, configuration files and lists
 *.asc
 *.conf
 *.lst

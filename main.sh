@@ -5,7 +5,7 @@
 # Description: Orchestrates the system generation process, handling preinstall,
 #              install, and postinstall phases.
 # Author: Shashoto Nur
-# Date: [Current Date]
+# Date: 07/03/2025
 # Version: 1.1
 # License: MIT
 ###############################################################################
@@ -92,12 +92,41 @@ execute_phase() {
     fi
 }
 
+print_project_introduction () {
+    local script_name=$(basename "$0")
+    local project_name="System Generator (SysGen)"
+    local description="A comprehensive toolkit for automating Arch Linux system setup as per author's preferences."
+    local version="1.1"
+    local author="Shashoto Nur"
+
+    # ANSI color codes
+    local reset="\e[0m"
+    local bold="\e[1m"
+    local green="\e[32m"
+    local cyan="\e[36m"
+    local yellow="\e[33m"
+
+    echo -e "${bold}${cyan}=======================================================================================${reset}"
+    echo -e "${bold}${green}  $project_name ${reset}"
+    echo -e "${bold}  Version: ${yellow}$version${reset}"
+    echo -e "${bold}  Author:  ${yellow}$author${reset}"
+    echo -e "${bold}  Script:  ${yellow}$script_name${reset}"
+    echo -e "${bold}${cyan}=======================================================================================${reset}"
+    echo -e "${bold}  Description:${reset} $description"
+    echo -e "${bold}${cyan}=======================================================================================${reset}"
+}
+
+
 # --- Main Script Execution ---
+main () {
+    print_project_introduction
 
-check_root_privileges
-check_fzf_installation
-select_installation_phase "$1"
+    check_root_privileges
+    check_fzf_installation
+    select_installation_phase "$1"
 
-execute_phase "$PHASE" "$SUDO_USER"
-log_success "Script execution completed."
-exit 0
+    execute_phase "$PHASE" "$SUDO_USER"
+    log_success "Script execution completed."
+}
+
+main "$1"

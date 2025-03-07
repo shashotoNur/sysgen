@@ -2,11 +2,10 @@
 
 ###############################################################################
 # Script Name: postinstall.sh (Initial Setup)
-# Description: Automates the initial configuration of a freshly installed Arch Linux system.
-#              This section focuses on system preparation, internet connectivity,
-#              package installation, and initial user setup.
+# Description: Automates the initial configuration of a freshly installed Arch
+#              Linux system as per the author's preferences.
 # Author: Shashoto Nur
-# Date: [Current Date]
+# Date: 07/03/2025
 # Version: 1.1
 # License: MIT
 ###############################################################################
@@ -312,17 +311,6 @@ update_pacman_mirrorlist() {
     }
 
     log_success "Pacman mirrorlist updated successfully."
-}
-
-#--- KDE setup ---
-disable_duplicate_dunst_activation() {
-    log_info "Disabling KDE duplicate dunst activation..."
-    sudo mv /usr/share/dbus-1/services/org.kde.plasma.Notifications.service \
-        /usr/share/dbus-1/services/org.kde.plasma.Notifications.service.disabled || {
-        log_error "Failed to disable the activation."
-        return 1
-    }
-    log_success "Disabled successfully."
 }
 
 # --- Bootloader setup ---
@@ -885,8 +873,8 @@ update_zen_browser_config() {
     log_success "Zen configurations have been updated!"
 }
 
-# --- Preload Setup ---
-setup_preload() {
+# --- Terminal Apps Setup ---
+terminal_apps_setup() {
     log_info "Configuring terminal apps..."
 
     # Preload
@@ -1508,9 +1496,6 @@ postinstall() {
     create_user_directories || exit 1
     copy_backup_files "$usb_device" "$multiboot_mount" "$storage_mount" || exit 1
 
-    # KDE setup
-    disable_duplicate_dunst_activation || exit 1
-
     # Bootloader, Network and app managment
     configure_bootloader_theme || exit 1
     configure_network || exit 1
@@ -1550,7 +1535,7 @@ postinstall() {
     download_iptv_playlist || exit 1
     install_vscode_extensions || exit 1
     update_zen_browser_config || exit 1
-    setup_preload || exit 1
+    terminal_apps_setup || exit 1
     setup_gemini_console || exit 1
     configure_tmux || exit 1
     configure_syncthing || exit 1

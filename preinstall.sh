@@ -5,7 +5,7 @@
 # Description: Prepares a USB drive for system installation, including ISO
 #              creation, Ventoy setup, data backup, and configuration.
 # Author: Shashoto Nur
-# Date: [Current Date]
+# Date: 07/03/2025
 # Version: 1.1
 # License: MIT
 ###############################################################################

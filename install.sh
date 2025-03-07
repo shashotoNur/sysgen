@@ -6,7 +6,7 @@
 #              specified drive, including partitioning, encryption, base system
 #              installation, and setup postinstallation script.
 # Author: Shashoto Nur
-# Date: [Current Date]
+# Date: 07/03/2025
 # Version: 1.1
 # License: MIT
 ###############################################################################
@@ -78,7 +78,6 @@ unit_to_bytes() {
 }
 
 # --- System Checks ---
-
 check_uefi() {
     if [[ ! -d /sys/firmware/efi ]]; then
         log_error "System is not booted in UEFI mode!"
@@ -96,7 +95,6 @@ check_internet() {
 }
 
 # --- Partitioning and Formatting ---
-
 partition_disk() {
     local drive="$1"
     local config_values="$2"
@@ -186,7 +184,6 @@ format_partitions() {
 }
 
 # --- Encryption Functions ---
-
 encrypt_partition() {
     local partition="$1"
     local password="$2"
@@ -205,7 +202,6 @@ encrypt_partition() {
 }
 
 # ---  Btrfs Subvolume Creation ---
-
 create_btrfs_subvolumes() {
     local root_mount="/mnt"
     local home_mount="$root_mount/home"
@@ -240,7 +236,6 @@ create_btrfs_subvolumes() {
 }
 
 # --- Mount Functions ---
-
 mount_partitions() {
     local root_mount="/mnt"
     local home_mount="$root_mount/home"
@@ -289,7 +284,6 @@ generate_fstab() {
 }
 
 # --- User and System Configuration ---
-
 configure_system() {
     local root_password="${CONFIG_VALUES["Root Password"]}"
     local username="${CONFIG_VALUES["Username"]}"
@@ -331,7 +325,6 @@ EOF
 }
 
 # ---  Keyfile Management ---
-
 manage_keyfiles() {
     local usb_device=$(lsblk -o NAME,TYPE,RM | grep -E 'disk.*1' | awk '{print "/dev/"$1}')
     local usb_mount="/mnt/usbkey"
@@ -381,7 +374,6 @@ update_mirrors() {
 }
 
 # --- Install GRUB ---
-
 install_grub() {
     local luks_uuid=$(blkid -s UUID -o value "${CONFIG_VALUES["Drive"]}2")
     local usb_uuid=$(blkid -s UUID -o value $(lsblk -o NAME,TYPE,RM | grep -E 'disk.*1' | awk '{print "/dev/"$1}')3)
@@ -401,16 +393,50 @@ install_grub() {
     log_success "GRUB installed successfully."
 }
 
-# --- postinstallation Script Execution ---
+# --- Auto-Login Function ---
+ensure_auto_login() {
+    local username="$1"
+    local tty="tty1" # Default to tty1
 
+    if [ -z "$username" ]; then
+        log_info "Usage: ensure_auto_login <username> [tty]"
+        log_info "  tty (optional): The tty to enable auto-login on (e.g., tty2). Defaults to tty1."
+        return 1
+    fi
+
+    if [ -n "$2" ]; then
+        tty="$2"
+    fi
+
+    local override_dir="/mnt/etc/systemd/system/getty@${tty}.service.d"
+    local override_file="${override_dir}/override.conf"
+
+    sudo mkdir -p "$override_dir"
+
+    sudo tee "$override_file" >/dev/null <<EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin $username --noclear %I 38400 linux
+EOF
+
+    if [ $? -eq 0 ]; then
+        log_success "Auto-login enabled for user '$username' on $tty."
+        return 0
+    else
+        log_error "Failed to enable auto-login."
+        return 1
+    fi
+}
+
+# --- Postinstallation Script Execution ---
 execute_post_install() {
     local username="$username"
     log_info "Creating a postinstall script runner..."
-    BASHRC="/mnt/home/$username/.bashrc"
+    PROFILE="/mnt/home/$username/.bash_profile"
 
     # Create the target script
-    echo -e "# Launch the post install script\nsudo bash /home/$username/Scratch/sysgen/main.sh postinstall\nsudo mv /home/$username/Scratch/sysgen/main.sh /home/$username/Scratch/sysgen/main.sh.done\n\n# Remove self (to avoid running more than once)\nsudo rm \"$BASHRC\"\n\necho \"Bye bye!\"\npoweroff" >"$BASHRC" || {
-        log_error "Failed to create post-install runner in $BASHRC"
+    echo -e "# Launch the post install script\nsudo bash /home/$username/Scratch/sysgen/main.sh postinstall\nsudo mv /home/$username/Scratch/sysgen/main.sh /home/$username/Scratch/sysgen/main.sh.done\n\n# Remove self (to avoid running more than once)\nsudo rm \"$PROFILE\"\n\necho \"Bye bye!\"\npoweroff" >"$PROFILE" || {
+        log_error "Failed to create post-install runner in $PROFILE"
         return 1
     }
 
@@ -418,7 +444,6 @@ execute_post_install() {
 }
 
 # --- Backup Configuration ---
-
 backup_config() {
     local storage_mount="/mnt/storage"
     local usb_device=$(lsblk -o NAME,TYPE,RM | grep -E 'disk.*1' | awk '{print "/dev/"$1}')
@@ -447,56 +472,35 @@ backup_config() {
 ################################################################################################
 
 install() {
-    set -e # Exit on error
-
-    # Check UEFI mode and internet connectivity
     check_uefi || return 1
     read_config || return 1
     check_internet || return 1
-    # Select drive if not specified in config
+
     if [[ "${CONFIG_VALUES["Drive"]}" == "/dev/" || -z "${CONFIG_VALUES["Drive"]}" ]]; then
         CONFIG_VALUES["Drive"]=$(select_drive) || return 1
     fi
 
-    # Wipe the selected drive
     log_info "Wiping ${CONFIG_VALUES["Drive"]}..."
     wipefs --all --force "${CONFIG_VALUES["Drive"]}" || log_error "Failed to wipe drive" && return 1
     log_success "Drive wiped successfully."
 
-    # Partition and format the disk
     partition_disk "${CONFIG_VALUES["Drive"]}" "${CONFIG_VALUES[@]}" || return 1
     format_partitions || return 1
 
-    # Encrypt partitions
     encrypt_partition "${CONFIG_VALUES["Drive"]}2" "${CONFIG_VALUES["LUKS Password"]}" "cryptroot" || return 1
     encrypt_partition "${CONFIG_VALUES["Drive"]}4" "${CONFIG_VALUES["LUKS Password"]}" "crypthome" || return 1
 
-    # Create Btrfs subvolumes
     create_btrfs_subvolumes || return 1
-
-    # Mount partitions
     mount_partitions || return 1
-
-    # Install base system and generate fstab.
     install_base_system || return 1
     generate_fstab || return 1
-
-    # Manage Keyfiles on USB
     manage_keyfiles || return 1
 
-    # Update mirrors before chroot.
     update_mirrors || return 1
-
-    #Configure the system inside the chroot
     configure_system || return 1
-
-    # Install GRUB after system configuration within chroot.
     install_grub || return 1
-
-    # Execute postinstallation tasks.
+    ensure_auto_login "${CONFIG_VALUES["Username"]}" || return 1
     execute_post_install
-
-    # Backup config after all operations are completed.
     backup_config || return 1
 
     log_success "Installation completed successfully."
