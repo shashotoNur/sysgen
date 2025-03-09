@@ -5,7 +5,7 @@
 # Description: Prepares a USB drive for system installation, including ISO
 #              creation, Ventoy setup, data backup, and configuration.
 # Author: Shashoto Nur
-# Date: 07/03/2025
+
 # Version: 1.1
 # License: MIT
 ###############################################################################
@@ -13,13 +13,13 @@
 # --- Configuration ---
 set -euo pipefail # Exit on error, unset variable, or pipeline failure
 
-# --- Source files ---
-source ./source.sh
-source_lib_files ../lib/
-
 preinstall() {
+    # --- Source files ---
+    while IFS= read -r -d '' script; do
+        source "$script"
+    done < <(find lib/ -type f -name "*.sh" -print0)
+
     local user="$1"
-    # Check command availability
     check_command_availability ventoy tmux mkarchiso fzf mkfs.vfat mkfs.btrfs
 
     # Setup required variables
@@ -61,7 +61,7 @@ preinstall() {
     setup_tmux_session "$usb_device" "$storage_size_mb" "$gpg_passphrase"
     create_partitions "$usb_device" "$multiboot_size_mb"
     format_storage_partition "$usb_device"
-    mount_partitions "$usb_device"
+    mount_usb_partitions "$usb_device"
     copy_files_to_usb
     clean_up
     configure_ventoy

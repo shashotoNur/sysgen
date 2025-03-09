@@ -214,7 +214,7 @@ backup_configurations() {
     log_info "Timeshift configurations backed up."
 
     mkdir -p ./backup/sysgen
-    cp -r ./*.sh ./*.conf ./*.lst ./utils/ ./backup/sysgen/
+    cp -r main.sh install.conf sync_dirs.lst ./bin ./lib ./backup/sysgen/
     log_info "Sysgen scripts and configurations backed up."
 
     log_success "All configurations backed up."

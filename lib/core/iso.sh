@@ -27,7 +27,7 @@ build_custom_arch_iso() {
     # Copy user scripts into airootfs
     log_info "Copying custom scripts into airootfs..."
     mkdir -p "$PROFILE_DIR/airootfs/root/sysgen"
-    cp -r ./*.sh ./*.conf ./*.lst ./utils/ "$PROFILE_DIR/airootfs/root/sysgen" || {
+    cp -r main.sh install.conf sync_dirs.lst ./bin ./lib "$PROFILE_DIR/airootfs/root/sysgen" || {
         log_error "Failed to copy custom scripts to airootfs."
         return 1
     }

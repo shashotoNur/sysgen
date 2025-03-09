@@ -18,7 +18,7 @@ unmount_usb_partitions() {
     fi
 }
 
-mount_partitions() {
+mount_usb_partitions() {
     local storage_mount="/mnt/storage"
     local multiboot_mount="/mnt/multiboot"
 
@@ -84,7 +84,7 @@ mount_partitions() {
         log_error "Failed to mount home partition"
         return 1
     }
-    mount "${CONFIG_VALUES["Drive"]}1" "$boot_mount" || {
+    mount "${1}1" "$boot_mount" || {
         log_error "Failed to mount boot partition"
         return 1
     }

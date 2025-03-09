@@ -3,10 +3,11 @@
 # --- GitHub Repository Cloning ---
 clone_github_repos() {
     log_info "Importing Github repositories..."
+    local github_token="$1"
     git clone --depth 1 git@github.com:shashotoNur/clone-repos.git ~/Workspace
 
     log_info "Logging in to GitHub CLI..."
-    echo "${CONFIG_VALUES["Github Token"]}" | gh auth login --with-token
+    echo "${github_token}" | gh auth login --with-token
 
     mv ~/Workspace/clone-repos/clone.sh ~/Workspace/
     bash ~/Workspace/clone.sh
@@ -18,13 +19,14 @@ clone_github_repos() {
 # --- Music Playlist Setup ---
 setup_music_playlist() {
     log_info "Fetching music playlist..."
+    local music_playlist_link="$1"
     local MUSICDIR="~/Music/Sound Of My Life"
 
     mkdir -p "$MUSICDIR"
     cd "$MUSICDIR"
     pip install yt-dlp
 
-    yt-dlp -x --audio-format mp3 --download-archive archive.txt --embed-thumbnail --embed-metadata "${CONFIG_VALUES["Music Playlist Link"]}" || {
+    yt-dlp -x --audio-format mp3 --download-archive archive.txt --embed-thumbnail --embed-metadata "${music_playlist_link}" || {
         log_error "Failed to download music playlist."
         return 1
     }
@@ -87,15 +89,19 @@ setup_onefilelinux() {
 # --- Mega CMD Setup ---
 setup_mega_cmd() {
     log_info "Setting up MegaCMD..."
+    local mega_key="$1"
+    local email="$2"
+    local mega_password="$3"
     yay -S megacmd-bin ffmpeg-compat-59 --needed --noconfirm
 
-    mega_login
+    mega_login "$mega_key" "$email" "$mega_password"
     log_success "MegaCMD setup completed."
 }
 
 # Function to generate totp code
 generate_totp_code() {
     log_info "Generating TOTP code..."
+    local mega_key="$1"
     local time_step=30
     local current_time
     local totp_code
@@ -104,7 +110,7 @@ generate_totp_code() {
         local expiring_in=$((time_step - (current_time % time_step)))
 
         if [[ $expiring_in -ge 15 ]]; then
-            totp_code=$(oathtool -b --totp "${CONFIG_VALUES["MEGA KEY"]}" -c $((current_time / time_step)) 2>&1) || {
+            totp_code=$(oathtool -b --totp "$mega_key" -c $((current_time / time_step)) 2>&1) || {
                 log_error "Failed to generate TOTP code."
                 return 1
             }
@@ -121,9 +127,13 @@ generate_totp_code() {
 # Function to log in to mega
 mega_login() {
     local totp_code
-    totp_code=$(generate_totp_code)
+    local mega_key="$1"
+    local email="$2"
+    local mega_password="$3"
+
+    totp_code=$(generate_totp_code $mega_key)
     log_info "Logging in to Mega..."
-    mega-login "${CONFIG_VALUES["Email"]}" "${CONFIG_VALUES["Mega Password"]}" --auth-code="$totp_code" || {
+    mega-login "$email" "$mega_password" --auth-code="$totp_code" || {
         log_error "Failed to log in to Mega."
         return 1
     }
@@ -131,7 +141,7 @@ mega_login() {
     local user
     user=$(mega-whoami | grep "Account e-mail:" | awk '{print $3}')
 
-    if [[ "$user" == "${CONFIG_VALUES["Email"]}" ]]; then
+    if [[ "$user" == "$email" ]]; then
         log_success "Login to mega.nz has been successful!"
         return 0
     else
@@ -214,12 +224,13 @@ backup_user_data() {
 get_mega_sync_directories() {
     local user="$1"
     log_info "Prompting for MEGA sync directories (if any)..."
-    read -rp "Do you want to select directories to backup your MEGA sync data? (y/n): " choice
+    read -rp "Do you want to select directories to backup your MEGA sync data? (y/N): " choice
     if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
         log_info "Select the directories you want to sync on MEGA."
         find /home/"$user" -type d -print0 | fzf --read0 --print0 --multi >sync_dirs.lst
         log_success "MEGA sync directories selected."
     else
+        echo "" >sync_dirs.lst
         log_info "MEGA sync backup selection skipped."
     fi
 }

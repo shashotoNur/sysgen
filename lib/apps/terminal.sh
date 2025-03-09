@@ -10,7 +10,7 @@ terminal_apps_setup() {
 
     # Jrnl
     mkdir -p ~/.config/jrnl
-    echo -e "colors:\n  body: none\n  date: black\n  tags: yellow\n  title: cyan\ndefault_hour: 9\ndefault_minute: 0\neditor: 'nvim'\nencrypt: false\nhighlight: true\nindent_character: '|'\njournals:\n  default:\n    journal: /home/${CONFIG_VALUES["Username"]}/Documents/data/journal.txt\nlinewrap: 79\ntagsymbols: '#@'\ntemplate: false\ntimeformat: '%F %r'\nversion: v4.2" >~/.config/jrnl/jrnl.yaml || {
+    echo -e "colors:\n  body: none\n  date: black\n  tags: yellow\n  title: cyan\ndefault_hour: 9\ndefault_minute: 0\neditor: 'nvim'\nencrypt: false\nhighlight: true\nindent_character: '|'\njournals:\n  default:\n    journal: /home/$1/Documents/data/journal.txt\nlinewrap: 79\ntagsymbols: '#@'\ntemplate: false\ntimeformat: '%F %r'\nversion: v4.2" >~/.config/jrnl/jrnl.yaml || {
         log_error "Failed to create jrnl config file."
         return 1
     }
@@ -56,7 +56,7 @@ setup_gemini_console() {
     cd ~/Scripts/gemini-console-chat
     npm install
 
-    sed -i "s/YOUR_API_KEY/${CONFIG_VALUES["Gemini API Key"]}/" index.js || {
+    sed -i "s/YOUR_API_KEY/${1}/" index.js || {
         log_error "Failed to set Gemini API key in index.js."
         return 1
     }
@@ -80,7 +80,7 @@ configure_tmux() {
 # --- Syncthing Configuration ---
 configure_syncthing() {
     log_info "Configuring Syncthing..."
-    sudo tee /etc/systemd/system/syncthing@${CONFIG_VALUES["Username"]}.service >/dev/null <<EOF
+    sudo tee /etc/systemd/system/syncthing@${1}.service >/dev/null <<EOF
 [Unit]
 Description=Syncthing - Open Source Continuous File Synchronization for %I
 Documentation=man:syncthing(1)
@@ -105,7 +105,7 @@ NoNewPrivileges=true
 [Install]
 WantedBy=multi-user.target
 EOF
-    sudo systemctl enable --now syncthing@${CONFIG_VALUES["Username"]}.service || {
+    sudo systemctl enable --now syncthing@${1}.service || {
         log_error "Failed to enable syncthing service."
         return 1
     }
@@ -136,13 +136,13 @@ setup_bluetooth() {
 # --- Git Credentials and SSH Setup ---
 configure_git_ssh() {
     log_info "Configuring Git..."
-    git config --global user.name "${CONFIG_VALUES["Full Name"]}"
-    git config --global user.email "${CONFIG_VALUES["Email"]}"
+    git config --global user.name "${1}"
+    git config --global user.email "${2}"
     git config --global core.editor "nvim"
     log_success "Git configured."
 
     log_info "Generating SSH key..."
-    ssh-keygen -t ed25519 -C "${CONFIG_VALUES["Email"]}" -N "" -f ~/.ssh/id_ed25519 || {
+    ssh-keygen -t ed25519 -C "${2}" -N "" -f ~/.ssh/id_ed25519 || {
         log_error "Failed to generate SSH key."
         return 1
     }

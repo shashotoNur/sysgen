@@ -5,7 +5,7 @@
 # Description: Automates the initial configuration of a freshly installed Arch
 #              Linux system as per the author's preferences.
 # Author: Shashoto Nur
-# Date: 07/03/2025
+
 # Version: 1.1
 # License: MIT
 ###############################################################################
@@ -17,13 +17,22 @@ set -euo pipefail # Exit on error, unset variable, or pipeline failure
 CONFIG_FILE="install.conf"
 SCRIPT_DIR="$(dirname "$0")"
 
-# --- Source files ---
-source ./source.sh
-source_lib_files ../lib/
-
 postinstall() {
+    # --- Source files ---
+    while IFS= read -r -d '' script; do
+        source "$script"
+    done < <(find lib/ -type f -name "*.sh" -print0)
+
     # Load configuration
-    load_configuration || exit 1
+    declare -A config_values
+    config_values=$(read_config) || return 1
+
+    # Handle LUKS and Root passwords
+    PASSWORD=${config_values["Password"]}
+    if [[ -n "$PASSWORD" ]]; then
+        config_values["LUKS Password"]=$PASSWORD
+        config_values["Root Password"]=$PASSWORD
+    fi
 
     # Mount USB
     readarray -t mount_info < <(mount_usb_drive)
@@ -41,7 +50,7 @@ postinstall() {
     setup_system_clock || exit 1
     update_pacman_mirrorlist || exit 1
     update_system_keyring || exit 1
-    set_user_password || exit 1
+    set_user_password "$config_values["Username"]" "$config_values["Root Password"]" || exit 1
 
     # Essential packages and configs
     install_essential_packages || exit 1
@@ -88,15 +97,15 @@ postinstall() {
     install_vscode_extensions || exit 1
     update_zen_browser_config || exit 1
     terminal_apps_setup || exit 1
-    setup_gemini_console || exit 1
+    setup_gemini_console "$config_values["Gemini API Key"]" || exit 1
     configure_tmux || exit 1
-    configure_syncthing || exit 1
+    configure_syncthing "${config_values["Username"]}" || exit 1
     install_gaming_packages || exit 1
     setup_bottles || exit 1
-    configure_git_ssh || exit 1
+    configure_git_ssh "$config_values["Full Name"]" "$config_values["Email"]" || exit 1
     configure_gpg || exit 1
-    clone_github_repos || exit 1
-    setup_music_playlist || exit 1
+    clone_github_repos "$config_values["Github Token"]" || exit 1
+    setup_music_playlist "$config_values["Music Playlist Link"]" || exit 1
     download_wikipedia_archive || exit 1
     configure_timeshift || exit 1
     setup_onefilelinux || exit 1
@@ -106,7 +115,7 @@ postinstall() {
     setup_qbittorrent_theme || exit 1
     download_torrents || exit 1
     set_sddm_background || exit 1
-    setup_mega_cmd || exit 1
+    setup_mega_cmd "$config_values["Mega Key"]" "$config_values["Email"]" "$config_values["Mega Password"]" || exit 1
     setup_mega_sync || exit 1
     setup_zsh || exit 1
     restore_user_backups || exit 1

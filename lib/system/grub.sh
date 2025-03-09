@@ -2,7 +2,7 @@
 
 # --- Install GRUB ---
 install_grub() {
-    local luks_uuid=$(blkid -s UUID -o value "${CONFIG_VALUES["Drive"]}2")
+    local luks_uuid=$(blkid -s UUID -o value "${1}2")
     local usb_uuid=$(blkid -s UUID -o value $(lsblk -o NAME,TYPE,RM | grep -E 'disk.*1' | awk '{print "/dev/"$1}')3)
     local key_file="luks-root.key"
 

@@ -2,7 +2,7 @@
 
 check_command_availability() {
     local commands=("$@")
-    log_info "Checking command availability: ${commands[@]}"
+    log_info "Checking command availability: $commands"
     for cmd in "${commands[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
             log_error "'$cmd' is not installed. Please install it and try again."
@@ -59,7 +59,7 @@ setup_tmux_session() {
     tmux new-session -d -s "$session_name"
 
     # Pane 1: Build a modified version of the Arch ISO
-    tmux send-keys -t "$session_name" "echo 'Cloning ArchISO and building.'; source ./source.sh && source_lib_files ../lib/ && build_custom_arch_iso . && exit" C-m
+    tmux send-keys -t "$session_name" "echo 'Cloning ArchISO and building.'; source lib/core/logging.sh && source lib/core/iso.sh && build_custom_arch_iso . && exit" C-m
 
     # Pane 2: Install Ventoy on multiboot partition
     tmux split-window -h -t "$session_name"

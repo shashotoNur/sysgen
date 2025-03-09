@@ -113,7 +113,7 @@ partition_disk() {
 
 # Function to format partitions
 format_partitions() {
-    local drive="${CONFIG_VALUES["Drive"]}"
+    local drive="${1}"
     local boot_part="$drive"1
     local root_part="$drive"2
     local swap_part="$drive"3
@@ -125,7 +125,7 @@ format_partitions() {
     mkfs.btrfs -f "$root_part" -L ROOT || log_error "Failed to format root partition" && return 1
     mkfs.btrfs -f "$home_part" -L HOME || log_error "Failed to format home partition" && return 1
 
-    if [[ "${CONFIG_VALUES["Swap Partition"]}" != "0" ]]; then
+    if [[ "${2}" != "0" ]]; then
         mkswap "$swap_part" -L SWAP || log_error "Failed to format swap partition" && return 1
         swapon "$swap_part" || log_error "Failed to activate swap partition" && return 1
     fi

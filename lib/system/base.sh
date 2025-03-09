@@ -21,8 +21,10 @@ generate_fstab() {
 
 # --- User Password Setup ---
 set_user_password() {
+    local username="$1"
+    local root_password="$2"
     log_info "Setting user password..."
-    echo "${CONFIG_VALUES["Username"]}:${CONFIG_VALUES["Root Password"]}" | sudo chpasswd || {
+    echo "$username:$root_password" | sudo chpasswd || {
         log_error "Failed to set user password."
         return 1
     }

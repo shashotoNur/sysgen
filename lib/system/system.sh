@@ -2,9 +2,9 @@
 
 # --- User and System Configuration ---
 configure_system() {
-    local root_password="${CONFIG_VALUES["Root Password"]}"
-    local username="${CONFIG_VALUES["Username"]}"
-    local hostname="${CONFIG_VALUES["Hostname"]}"
+    local root_password="$1"
+    local username="$2"
+    local hostname="$3"
 
     # Chroot and configure the system
     log_info "Entering chroot environment..."

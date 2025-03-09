@@ -31,6 +31,7 @@ extract_config_value() {
 # Read configuration from install.conf
 read_config() {
     local key
+    local value
     declare -A config_values
 
     # Check if config file exists
@@ -40,10 +41,13 @@ read_config() {
     fi
 
     while IFS='=' read -r key value; do
+        key=$(echo "$key" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        value=$(echo "$value" | tr -d '[:space:]')
         config_values["$key"]="$value"
     done < <(sed '/^#/d;s/^[[:blank:]]*//;s/[[:blank:]]*$//' "$CONFIG_FILE") #remove comments and trim whitespace
 
-    return 0
+    # Output key-value pairs in a format that can be read back into an associative array
+    printf "%s=\"%s\"\n" "${!config_values[@]}" "${config_values[@]}"
 }
 
 # Prompts the user for various installation settings
@@ -51,6 +55,7 @@ get_installation_config() {
     set -e # Exit on error
 
     OUTPUT_FILE="install.conf"
+    DRIVE=""
 
     # Ask for user details
     read -p "Enter your full name: " FULL_NAME
@@ -192,7 +197,7 @@ get_installation_config() {
 }
 
 get_installation_configuration() {
-    log_info "\nGetting installation configuration..."
+    log_info "Getting installation configuration..."
     get_installation_config
     log_success "Installation configuration retrieved."
 }

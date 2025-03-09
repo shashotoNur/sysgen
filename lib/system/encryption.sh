@@ -24,8 +24,8 @@ manage_keyfiles() {
     local usb_mount="/mnt/usbkey"
     local key_file="luks-root.key"
     local keyfile_path="$usb_mount/$key_file"
-    local luks_device="${CONFIG_VALUES["Drive"]}2"
-    local luks_password="${CONFIG_VALUES["LUKS Password"]}"
+    local luks_device="${1}2"
+    local luks_password="$2"
 
     mkdir -p "$usb_mount"
 
