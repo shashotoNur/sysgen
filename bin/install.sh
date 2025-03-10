@@ -34,6 +34,8 @@ install() {
         config_values["LUKS Password"]=$PASSWORD
         config_values["Root Password"]=$PASSWORD
     fi
+
+    connect_to_wifi "${config_values["WiFi SSID"]}" "${config_values["WiFi Password"]}" || return 1
     check_internet || return 1
 
     if [[ "${config_values["Drive"]}" == "/dev/" || -z "${config_values["Drive"]}" ]]; then
@@ -52,11 +54,14 @@ install() {
 
     create_btrfs_subvolumes || return 1
     mount_partitions "${config_values["Drive"]}" || return 1
-    install_base_system || return 1
-    generate_fstab || return 1
-    manage_keyfiles "$config_values["Drive"]" "$config_values["LUKS Password"]" || return 1
 
     update_mirrors || return 1
+    install_base_system || return 1
+
+    generate_fstab || return 1
+    local usb_device=$(lsblk -o NAME,TYPE,RM | grep -E 'disk.*1' | awk '{print "/dev/"$1}')
+    manage_keyfiles "${config_values["LUKS Password"]}" "$config_values["Drive"]4" "$config_values["Drive"]2" "$usb_device" || return 1
+
     configure_system "${config_values["Root Password"]}" "${config_values["Username"]}" "${config_values["Hostname"]}" || return 1
     install_grub "$config_values["Drive"]" || return 1
     ensure_auto_login "${config_values["Username"]}" || return 1

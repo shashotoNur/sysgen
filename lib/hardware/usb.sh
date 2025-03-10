@@ -30,7 +30,7 @@ copy_files_to_usb() {
     log_success "Files copied to the USB device."
 }
 
-
+# --- Ventoy Configuration ---
 configure_ventoy() {
     log_info "Configuring Ventoy..."
     local multiboot_mount="/mnt/multiboot"

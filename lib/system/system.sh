@@ -30,9 +30,8 @@ EOF
         # Set timezone and sync hardware clock
         ln -sf /usr/share/zoneinfo/Asia/Dhaka /etc/localtime;
         hwclock --systohc;
-        # Install grub
-        grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB;
-
+        echo "Installing essential packages..."
+        pacman -Sy --noconfirm grub efibootmgr dosfstools os-prober mtools fuse3 zsh
     " || {
         log_error "Failed to configure system within chroot"
         return 1

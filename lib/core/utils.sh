@@ -148,7 +148,7 @@ execute_post_install() {
     PROFILE="/mnt/home/$username/.bash_profile"
 
     # Create the target script
-    echo -e "# Launch the post install script\nsudo bash /home/$username/Scratch/sysgen/main.sh postinstall\nsudo mv /home/$username/Scratch/sysgen/main.sh /home/$username/Scratch/sysgen/main.sh.done\n\n# Remove self (to avoid running more than once)\nsudo rm \"$PROFILE\"\n\necho \"Bye bye!\"\npoweroff" >"$PROFILE" || {
+    echo -e "# Launch the post install script\nsudo bash /home/$username/Backups/sysgen/main.sh postinstall\nsudo mv /home/$username/Backups/sysgen/main.sh /home/$username/Backups/sysgen/main.sh.done\n\n# Remove self (to avoid running more than once)\nsudo rm \"$PROFILE\"\n\necho \"Bye bye!\"\npoweroff" >"$PROFILE" || {
         log_error "Failed to create post-install runner in $PROFILE"
         return 1
     }
