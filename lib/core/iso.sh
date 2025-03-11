@@ -34,8 +34,8 @@ build_custom_arch_iso() {
 
     # Ensure the script runs on boot
     log_info "Ensuring install.sh runs on boot..."
-    echo "cd ./sysgen && bash install.sh" >>"$PROFILE_DIR/airootfs/root/.bashrc" || {
-        log_error "Failed to update .bashrc."
+    echo "cd ./sysgen && sudo bash main.sh install" >>"$PROFILE_DIR/airootfs/root/.zshrc" || {
+        log_error "Failed to update .zshrc."
         return 1
     }
 

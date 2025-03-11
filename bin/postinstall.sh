@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ###############################################################################
-# Script Name: postinstall.sh (Initial Setup)
+# Script Name: postinstall.sh
 # Description: Automates the initial configuration of a freshly installed Arch
 #              Linux system as per the author's preferences.
 # Author: Shashoto Nur
@@ -10,26 +10,14 @@
 # License: MIT
 ###############################################################################
 
-# --- Configuration ---
-set -euo pipefail # Exit on error, unset variable, or pipeline failure
-
-# --- Global Variables ---
-CONFIG_FILE="install.conf"
-SCRIPT_DIR="$(dirname "$0")"
-
 postinstall() {
-    # --- Source files ---
-    while IFS= read -r -d '' script; do
-        source "$script"
-    done < <(find lib/ -type f -name "*.sh" -print0)
-
     # Load configuration
-    declare -A config_values
-    config_values=$(read_config) || return 1
+    config_values=$(read_config "install.conf")
+    eval "$config_values"
 
     # Handle LUKS and Root passwords
-    PASSWORD=${config_values["Password"]}
-    if [[ -n "$PASSWORD" ]]; then
+    if [[ -v config_values["Password"] ]]; then
+        PASSWORD=${config_values["Password"]}
         config_values["LUKS Password"]=$PASSWORD
         config_values["Root Password"]=$PASSWORD
     fi
@@ -132,9 +120,3 @@ postinstall() {
 
     echo "Post installation completed successfully."
 }
-
-
-################################################################################################
-# --- Main Script Execution ---
-
-postinstall "$@"

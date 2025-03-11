@@ -11,31 +11,21 @@
 # License: MIT
 ###############################################################################
 
-# --- Configuration ---
-set -euo pipefail # Exit on error, unset variable, or pipeline failure
-
-# --- Global Variables ---
-CONFIG_FILE="install.conf"
-SCRIPT_DIR="$(dirname "$0")" # Get the directory of the script
-
 install() {
-    # --- Source files ---
-    while IFS= read -r -d '' script; do
-        source "$script"
-    done < <(find lib/ -type f -name "*.sh" -print0)
-
     check_uefi || return 1
-    declare -A config_values
-    config_values=$(read_config) || return 1
+
+    # Load configuration
+    config_values=$(read_config "install.conf")
+    eval "$config_values"
 
     # Handle LUKS and Root passwords
-    PASSWORD=${config_values["Password"]}
-    if [[ -n "$PASSWORD" ]]; then
+    if [[ -v config_values["Password"] ]]; then
+        PASSWORD=${config_values["Password"]}
         config_values["LUKS Password"]=$PASSWORD
         config_values["Root Password"]=$PASSWORD
     fi
 
-    connect_to_wifi "${config_values["WiFi SSID"]}" "${config_values["WiFi Password"]}" || return 1
+    # connect_to_wifi "${config_values["WiFi SSID"]}" "${config_values["WiFi Password"]}" || return 1
     check_internet || return 1
 
     if [[ "${config_values["Drive"]}" == "/dev/" || -z "${config_values["Drive"]}" ]]; then
@@ -43,6 +33,7 @@ install() {
     fi
 
     log_info "Wiping ${config_values["Drive"]}..."
+    exit
     wipefs --all --force "${config_values["Drive"]}" || log_error "Failed to wipe drive" && return 1
     log_success "Drive wiped successfully."
 
@@ -71,8 +62,3 @@ install() {
     log_success "Installation completed successfully."
     reboot
 }
-
-################################################################################################
-# --- Main Script Execution ---
-
-install

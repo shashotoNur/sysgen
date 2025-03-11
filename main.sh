@@ -13,6 +13,15 @@
 # --- Configuration ---
 set -euo pipefail # Exit on error, unset variable, or pipeline failure
 
+# --- Source files ---
+while IFS= read -r -d '' script; do
+    source "$script"
+done < <(find bin/ lib/ -type f -name "*.sh" -print0)
+
+# --- Global Variables ---
+CONFIG_FILE="install.conf"
+SCRIPT_DIR="$(dirname "$0")" # Get the directory of the script
+
 # --- Functions ---
 
 check_root_privileges() {
@@ -55,33 +64,23 @@ execute_phase() {
     local phase="$1"
     local user="$2"
 
-    log_info "Executing phase: $phase"
-    local script_path="./bin/${phase}.sh"
-    if [[ ! -f "$script_path" ]]; then
-        log_error "Script for phase '$phase' not found at '$script_path'."
-        exit 1
-    fi
-    log_info "Script path: $script_path"
+    log_info "Attempting to execute phase: $phase"
 
-    # Check for execution permission
-    if [[ ! -x "$script_path" ]]; then
-        log_warning "Script '$script_path' is not executable. Attempting to set executable permission..."
-        chmod +x "$script_path"
-        if [[ $? -ne 0 ]]; then
-            log_error "Failed to set executable permission on '$script_path'. Please check permissions and try again."
-            exit 1
+    # Check if the function exists
+    if declare -F "$phase" >/dev/null; then
+        log_info "Function '$phase' exists, executing..."
+        "$phase" "$user"
+
+        local result=$?
+        if [[ "$result" -eq 0 ]]; then
+            log_success "Phase '$phase' completed successfully."
+        else
+            log_error "Phase '$phase' failed with an error (exit code $result)."
+            return "$result"
         fi
-        log_success "Successfully set executable permission on '$script_path'."
-    fi
-
-    log_info "Running script: sudo \"$script_path\" \"$user\""
-    sudo "$script_path" "$user"
-
-    if [[ $? -eq 0 ]]; then
-        log_success "Phase '$phase' completed successfully."
     else
-        log_error "Phase '$phase' failed with an error."
-        exit 1
+        log_error "Function '$phase' not found."
+        return 1
     fi
 }
 

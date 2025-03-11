@@ -30,24 +30,16 @@ extract_config_value() {
 
 # Read configuration from install.conf
 read_config() {
-    local key
-    local value
     declare -A config_values
+    local file="$1"
 
-    # Check if config file exists
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        log_error "Config file '$CONFIG_FILE' not found."
-        return 1
-    fi
-
-    while IFS='=' read -r key value; do
-        key=$(echo "$key" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-        value=$(echo "$value" | tr -d '[:space:]')
+    while IFS= read -r line; do
+        key="${line%%: *}"
+        value="${line#*: }"
         config_values["$key"]="$value"
-    done < <(sed '/^#/d;s/^[[:blank:]]*//;s/[[:blank:]]*$//' "$CONFIG_FILE") #remove comments and trim whitespace
+    done < "$file"
 
-    # Output key-value pairs in a format that can be read back into an associative array
-    printf "%s=\"%s\"\n" "${!config_values[@]}" "${config_values[@]}"
+    declare -p config_values
 }
 
 # Prompts the user for various installation settings

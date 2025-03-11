@@ -120,7 +120,7 @@ check_local_installation() {
 select_drive() {
     local drive_selection
 
-    log_info "No drive specified. Selecting a drive using fzf..."
+    log_info "No drive specified. Select a drive..."
     drive_selection=$(lsblk -dpno NAME,SIZE | grep -E "/dev/sd|/dev/nvme|/dev/mmcblk" | fzf --prompt="Select a drive: " --height=10 --border --reverse | awk '{print $1}')
 
     if [[ -z "$drive_selection" ]]; then

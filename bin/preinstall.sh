@@ -10,9 +10,6 @@
 # License: MIT
 ###############################################################################
 
-# --- Configuration ---
-set -euo pipefail # Exit on error, unset variable, or pipeline failure
-
 preinstall() {
     # --- Source files ---
     while IFS= read -r -d '' script; do
@@ -69,8 +66,3 @@ preinstall() {
     check_local_installation "${config_values["Local Installation"]}"
     log_success "Preinstallation script completed."
 }
-
-################################################################################################
-# --- Main Script Execution ---
-
-preinstall "$1"
