@@ -25,15 +25,11 @@ install() {
         config_values["Root Password"]=$PASSWORD
     fi
 
-    # connect_to_wifi "${config_values["WiFi SSID"]}" "${config_values["WiFi Password"]}" || return 1
-    check_internet || return 1
-
     if [[ "${config_values["Drive"]}" == "/dev/" || -z "${config_values["Drive"]}" ]]; then
         config_values["Drive"]=$(select_drive) || return 1
     fi
 
     log_info "Wiping ${config_values["Drive"]}..."
-    exit
     wipefs --all --force "${config_values["Drive"]}" || log_error "Failed to wipe drive" && return 1
     log_success "Drive wiped successfully."
 

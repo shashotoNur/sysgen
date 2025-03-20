@@ -195,3 +195,55 @@ TODO:
 EOF
     log_success "Remaining setup steps written to ~/Documents/remaining_setup.md"
 }
+
+check_git_repos() {
+    local -a git_objects
+    local dir
+
+    log_info "Checking git directories for uncommitted and unpushed changes..."
+
+    if [[ $# -eq 0 ]]; then
+        log_error "No directories provided as arguments."
+        return 1
+    fi
+
+    # Find all directories containing a .git directory
+    readarray -d $'\0' git_objects < <(find "$@" -name .git -print0)
+
+    if [[ ${#git_objects[@]} -eq 0 ]]; then
+        log_info "No git directories found in the specified paths."
+        return 0
+    fi
+
+    for dir in "${git_objects[@]}"; do
+        dir=$(dirname $dir)
+
+        status=$(git -C "$dir" status --porcelain)
+        if [[ -n "$status" ]]; then
+            log_warning "  Uncommitted changes in: $dir"
+        fi
+
+        # Check for unpushed commits
+        branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD)
+        remote_url=$(git -C "$dir" config --get remote.origin.url)
+
+        if [[ -n "$remote_url" ]]; then
+            remote_branch=$(git -C "$dir" config --get branch."$branch".remote)
+            if [[ -z "$remote_branch" ]]; then
+                remote_branch="origin"
+            fi
+
+            if ! git -C "$dir" rev-list --count --left-right "$branch"..."$remote_branch/$branch" &>/dev/null; then
+                log_error "  Error checking push status for $dir"
+            else
+                unpushed_commits=$(git -C "$dir" rev-list --count --left-right "$branch"..."$remote_branch/$branch" | awk '{print $1}')
+                if [[ -n "$unpushed_commits" && "$unpushed_commits" -gt 0 ]]; then
+                    log_warning "  Unpushed commits in: $dir"
+                    git -C "$dir" log --oneline --graph "$remote_branch/$branch".."$branch"
+                fi
+            fi
+        else
+            log_warning "  No remote configured for $dir"
+        fi
+    done
+}

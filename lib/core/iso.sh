@@ -27,14 +27,14 @@ build_custom_arch_iso() {
     # Copy user scripts into airootfs
     log_info "Copying custom scripts into airootfs..."
     mkdir -p "$PROFILE_DIR/airootfs/root/sysgen"
-    cp -r main.sh install.conf sync_dirs.lst ./bin ./lib "$PROFILE_DIR/airootfs/root/sysgen" || {
+    cp -r install.conf sync_dirs.lst ./bin/laucher.sh "$PROFILE_DIR/airootfs/root/" || {
         log_error "Failed to copy custom scripts to airootfs."
         return 1
     }
 
     # Ensure the script runs on boot
     log_info "Ensuring install.sh runs on boot..."
-    echo "cd ./sysgen && sudo bash main.sh install" >>"$PROFILE_DIR/airootfs/root/.zshrc" || {
+    echo "sudo bash launcher.sh" >>"$PROFILE_DIR/airootfs/root/.zshrc" || {
         log_error "Failed to update .zshrc."
         return 1
     }

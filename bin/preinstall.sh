@@ -11,11 +11,6 @@
 ###############################################################################
 
 preinstall() {
-    # --- Source files ---
-    while IFS= read -r -d '' script; do
-        source "$script"
-    done < <(find lib/ -type f -name "*.sh" -print0)
-
     local user="$1"
     check_command_availability ventoy tmux mkarchiso fzf mkfs.vfat mkfs.btrfs
 
@@ -46,6 +41,7 @@ preinstall() {
         config_values["$key"]=$(extract_value "$key")
     done
 
+    check_git_repos "~/Documents" "~/Workspace"
     get_mega_sync_directories "$user"
     unmount_usb_partitions "$usb_device"
     wipe_usb_filesystems "$usb_device"

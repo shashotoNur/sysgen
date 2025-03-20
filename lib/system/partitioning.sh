@@ -90,7 +90,7 @@ partition_disk() {
         log_success "Partition $part_num created successfully."
     }
 
-    #Partitions sizes from config
+    # Partitions sizes from config
     local boot_size_bytes=$(unit_to_bytes "${config_values["Boot Partition"]}")
     local root_size_bytes=$(unit_to_bytes "${config_values["Root Partition"]}")
     local swap_size_bytes=$(unit_to_bytes "${config_values["Swap Partition"]}")

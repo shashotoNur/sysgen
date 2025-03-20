@@ -88,8 +88,8 @@ install_yay_applications() {
     log_info "Installing Yay applications..."
 
     local packages=(
-        ventoy-bin steghide go pkgx-git stacer-git nsnake gpufetch nudoku arch-update mongodb-bin
-        hyprland-qtutils pet-git musikcube tauon-music-box hollywood no-more-secrets nodejs-mapscii
+        ventoy-bin steghide go pkgx-git stacer-git nsnake gpufetch nudoku arch-update mongodb-bin doggo-bin
+        hyprland-qtutils pet-git musikcube tauon-music-box hollywood no-more-secrets nodejs-mapscii shc
         noti megasync-bin mongodb-compass smassh affine-bin solidtime-bin ngrok scc rmtrash nomacs cbonsai
         vrms-arch-git browsh timer sql-studio-bin posting dooit edex-ui-bin trash-cli-git appimagelauncher-bin
     )

@@ -198,27 +198,27 @@ backup_user_data() {
     >"$size_file"
 
     log_info "Prompting for files and directories to backup..."
-    SELECTED_ITEMS=$(
-        find /home/"$user" -mindepth 1 -maxdepth 5 | fzf --multi --preview 'du -sh {}' \
-            --bind "tab:execute-silent(
-            grep -Fxq {} "$selected_file" && sed -i '\|^{}$|d' "$selected_file" || echo {} >> "$selected_file";
-            xargs -d '\n' du -ch 2>/dev/null < "$selected_file" | grep total$ | sed 's/total\s*/<-Total size /' > "$size_file"
-        )+toggle" \
-            --preview 'cat ./fzf_total'
-    )
+    find /home/"$user" -mindepth 1 -maxdepth 5 | fzf --multi --preview 'du -sh {}' \
+        --bind "tab:execute-silent(
+        (grep -Fxq {} "$selected_file" && sed -i '\|^{}$|d' "$selected_file") || echo {} >> "$selected_file";
+        xargs -d '\n' du -ch 2>/dev/null < "$selected_file" | grep total$ | sed 's/total\s*/<-Total size /' > "$size_file"
+    )+toggle" \
+        --preview 'cat ./fzf_total'
 
-    rm "$selected_file" "$size_file"
-
-    if [[ -z "$SELECTED_ITEMS" ]]; then
-        log_info "No files or directories selected for backup."
-    else
+    if [[ -s "$selected_file" ]]; then
         log_info "Copying selected files to backup directory..."
         mkdir -p "$data_dir"
-        cp -r --parents $(printf '%s\n' "${SELECTED_ITEMS[@]}") "$data_dir"
+        while IFS= read -r line; do
+            cp -r --parents "$line" "$data_dir"
+        done <"$selected_file"
 
         log_info "Total size of selected items: \"$(du -sh $data_dir)\""
         log_success "Backup complete!"
+    else
+        log_info "No files or directories selected for backup."
     fi
+
+    rm "$selected_file" "$size_file"
 }
 
 get_mega_sync_directories() {

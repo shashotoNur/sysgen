@@ -2,6 +2,8 @@
 *.asc
 *.conf
 *.lst
+fzf_selected
+fzf_total
 
 # Ignore the temporarily generated directories
 backup/
