@@ -103,6 +103,7 @@ postinstall() {
     setup_qbittorrent_theme || exit 1
     download_torrents || exit 1
     set_sddm_background || exit 1
+    install_plymouth_theme || exit 1
     setup_mega_cmd "$config_values["Mega Key"]" "$config_values["Email"]" "$config_values["Mega Password"]" || exit 1
     setup_mega_sync || exit 1
     setup_zsh || exit 1

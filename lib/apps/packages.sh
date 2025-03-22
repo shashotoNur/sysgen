@@ -36,6 +36,7 @@ install_essential_packages() {
         emote
         mangohud
         cava
+        plymouth
     )
 
     sudo pacman -Syu --noconfirm --needed "${packages[@]}" || {

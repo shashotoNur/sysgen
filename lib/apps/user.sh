@@ -155,10 +155,10 @@ update_zen_browser_config() {
         "user_pref(\"browser.eme.ui.enabled\", false);"
     )
 
-    local profile_dir_name=$(cat ~/.var/app/app.zen_browser.zen/.zen/installs.ini | grep "Default=" | cut -d '=' -f 2)
-    local prefs_file=$(find ~/.var/app/app.zen_browser.zen/.zen/ -name "prefs.js" -path "*/$profile_dir_name/*")
-    local search_file=$(find ~/.var/app/app.zen_browser.zen/.zen/ -name "search.json.mozlz4" -path "*/$profile_dir_name/*")
-    local theme_file=$(find ~/.var/app/app.zen_browser.zen/.zen/ -name "zen-themes.css" -path "*/$profile_dir_name/*")
+    local profile_dir=$(cat ~/.var/app/app.zen_browser.zen/.zen/installs.ini | grep "Default=" | cut -d '=' -f 2)
+    local prefs_file=$(find ~/.var/app/app.zen_browser.zen/.zen/ -name "prefs.js" -path "*/$profile_dir/*")
+    local search_file=$(find ~/.var/app/app.zen_browser.zen/.zen/ -name "search.json.mozlz4" -path "*/$profile_dir/*")
+    local theme_file=$(find ~/.var/app/app.zen_browser.zen/.zen/ -name "zen-themes.css" -path "*/$profile_dir/*")
 
     for config in "${configs[@]}"; do
         local prefix=$(echo "$config" | cut -d ',' -f 1)
@@ -186,6 +186,43 @@ update_zen_browser_config() {
   content: \" [pdf] \";
 }" >>"$theme_file" || {
         log_error "Failed to append to zen-themes.css"
+        return 1
+    }
+
+    log_info "Setting up Zen browser theme..."
+    local REPO="JustAdumbPrsn/Nebula-A-Minimal-Theme-for-Zen-Browser"
+    local FILE_NAME="chrome.zip"
+    local SCRATCH_DIR=~/Scratch
+
+    local LATEST_VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | jq -r .tag_name) || {
+        log_error "Failed to fetch the latest Zen browser theme version."
+        return 1
+    }
+    log_info "Latest release version: $LATEST_VERSION"
+
+    wget -O "$SCRATCH_DIR/$FILE_NAME" "https://github.com/$REPO/releases/download/$LATEST_VERSION/$FILE_NAME" || {
+        log_error "Failed to download Zen browser theme."
+        return 1
+    }
+    log_success "Downloaded Zen browser theme to: $SCRATCH_DIR/$FILE_NAME"
+
+    unzip "$SCRATCH_DIR/$FILE_NAME" -d "$SCRATCH_DIR/zen_theme" || {
+        log_error "Failed to extract Zen browser theme."
+        return 1
+    }
+    log_success "Extracted Zen browser theme to: $SCRATCH_DIR/zen_theme"
+
+    local target_dir=$(find ~/.var/app/app.zen_browser.zen/.zen/ -path "*/$profile_dir/chrome")
+
+    if [[ -d "$target_dir" ]]; then
+        rm -rf "$target_dir" || {
+            log_error "Failed to remove existing chrome directory."
+            return 1
+        }
+    fi
+
+    cp -r "$SCRATCH_DIR/zen_theme/chrome" "$target_dir" || {
+        log_error "Failed to copy Zen browser theme to profile directory."
         return 1
     }
 

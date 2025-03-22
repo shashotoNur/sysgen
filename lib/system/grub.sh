@@ -53,3 +53,31 @@ set_sddm_background() {
     sudo cp "$WALLPAPER_FILE" "$TARGET_FILE"
     log_success "SDDM Background changed successfully"
 }
+
+install_plymouth_theme() {
+    log_info "Installing and configuring Plymouth theme..."
+
+    local theme_repo="https://github.com/adi1090x/plymouth-themes.git"
+    local theme_name="unrap"
+    local theme_path="pack_4"
+    local scratch_dir="~/Scratch"
+    local plymouth_themes_dir="/usr/share/plymouth/themes"
+
+    git clone --depth 1 "$theme_repo" "$scratch_dir/plymouth-themes"
+
+    # Copy the selected theme to the Plymouth themes directory
+    log_info "Copying theme '$theme_name' to Plymouth themes directory..."
+    sudo cp -r "$scratch_dir/plymouth-themes/$theme_path/$theme_name" "$plymouth_themes_dir" || {
+        log_error "Failed to copy theme '$theme_name' to '$plymouth_themes_dir'."
+        return 1
+    }
+
+    # Set the default Plymouth theme
+    log_info "Setting '$theme_name' as the default Plymouth theme..."
+    sudo plymouth-set-default-theme -R "$theme_name" || {
+        log_error "Failed to set '$theme_name' as the default Plymouth theme."
+        return 1
+    }
+
+    log_success "Plymouth theme '$theme_name' installed and configured successfully."
+}

@@ -59,7 +59,7 @@ manage_keyfiles() {
     }
 
     log_info "Updating mkinitcpio hooks..."
-    sed -i '/^HOOKS=/ s/\bfilesystems\b/encrypt btrfs/' /mnt/etc/mkinitcpio.conf || {
+    sed -i '/^HOOKS=/ s/\bfilesystems\b/plymouth encrypt btrfs/' /mnt/etc/mkinitcpio.conf || {
         log_error "Failed to update mkinitcpio hooks."
         return 1
     }
